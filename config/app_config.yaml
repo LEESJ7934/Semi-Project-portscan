@@ -8,8 +8,8 @@ db:
   name: port_scan
 
 scan_defaults:
-  target: "127.0.0.1"  # 기본 테스트용 타겟 (나중에 CLI로 덮어씀)
-  scan_type: "tcp"     # tcp / udp / tcp_udp
+  target: "127.0.0.1"  # 기본 테스트용 타겟 임의로 만들어 놓은 aws ec2 서버
+  scan_type: "tcp"     # tcp / udp / 
   port_range: "1-1024" # 문자열 그대로 넘겨서 파싱
   timeout: 1.0         # 초 단위
   max_workers: 100     # ThreadPoolExecutor 기본 스레드 수

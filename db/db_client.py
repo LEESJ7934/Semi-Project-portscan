@@ -1,5 +1,3 @@
-# db/db_client.py
-
 import os
 from pathlib import Path
 
