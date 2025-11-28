@@ -1,4 +1,3 @@
-# scanner/scanner.py
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
@@ -7,28 +6,28 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .utils import tcp_connect, parse_ports
 from .banner_grabber import grab_banner
+from .version_parser import parse_version
 from .service_fingerprints import guess_service
 
 
 @dataclass
 class PortScanResult:
     port: int
-    protocol: str  # "tcp"
-    state: str     # "open" / "closed"
+    protocol: str  # "tcp" / "udp"
+    state: str     # "open" / "closed" / "open|filtered"
     banner: str | None = None
     service: str | None = None
+    product: str | None = None
+    version: str | None = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
 
 
 def scan_single_port(host: str, port: int, timeout: float = 1.0) -> PortScanResult:
-    """
-    단일 포트 스캔.
-    - connect 성공: open, 배너 및 서비스 추정
-    - 실패: closed
-    """
+    # 1) TCP 연결 시도
     sock = tcp_connect(host, port, timeout=timeout)
+
     if sock is None:
         return PortScanResult(
             port=port,
@@ -36,16 +35,23 @@ def scan_single_port(host: str, port: int, timeout: float = 1.0) -> PortScanResu
             state="closed",
             banner=None,
             service=guess_service(port),
+            product=None,
+            version=None
         )
 
-    # 연결 성공했다면 배너 그랩 시도
+    # 연결 성공 → 바로 소켓 닫기
     try:
         sock.close()
-    except OSError:
+    except:
         pass
 
-    banner = grab_banner(host, port, timeout=timeout)
     service = guess_service(port)
+
+    # 2) 프로토콜별 banner grab
+    banner = grab_banner(host, port, service, timeout)
+
+    # 3) 배너 기반 버전 파싱
+    version = parse_version(service, banner)
 
     return PortScanResult(
         port=port,
@@ -53,14 +59,16 @@ def scan_single_port(host: str, port: int, timeout: float = 1.0) -> PortScanResu
         state="open",
         banner=banner,
         service=service,
+        product=service,  
+        version=version
     )
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from .utils import parse_ports
 
 def sequential_scan(host: str, ports: Iterable[int] | str, timeout: float = 1.0) -> List[Dict]:
     """
-    단일 IP에 대해 순차 스캔.
-    - 입력: 포트 리스트 또는 포트 범위 문자열 ("20-1024")
-    - 출력: [{port, protocol, state, banner, service}, ...]
+    단일 IP에 대해 순차 TCP 스캔.
     """
     port_list = parse_ports(ports)
     results: List[Dict] = []
@@ -79,9 +87,7 @@ def threaded_scan(
     max_workers: int = 100,
 ) -> List[Dict]:
     """
-    단일 IP에 대해 멀티스레드 스캔.
-    - ThreadPoolExecutor 사용
-    - 결과는 포트 번호 기준 정렬
+    단일 IP에 대해 멀티스레드 TCP 스캔.
     """
     port_list = parse_ports(ports)
     results: List[PortScanResult] = []
@@ -95,6 +101,5 @@ def threaded_scan(
             res = future.result()
             results.append(res)
 
-    # 포트 번호 기준 정렬 후 dict 리스트로 반환
     results.sort(key=lambda r: r.port)
     return [r.to_dict() for r in results]

@@ -31,6 +31,6 @@ def get_connection() -> MySQLConnection:
         user=user,
         password=password,
         database=db_name,
-        autocommit=False,  # 트랜잭션은 코드에서 관리
+        autocommit=False,  # 트랜잭션은 코드에서 관리, autocommit=True면 각 SQL이 실행될 때마다 즉시 DB에 반영된다.
     )
     return conn

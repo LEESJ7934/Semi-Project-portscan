@@ -24,8 +24,7 @@ CREATE TABLE IF NOT EXISTS scans (
 CREATE TABLE IF NOT EXISTS hosts (
     id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     host_ip         VARCHAR(45)     NOT NULL,  
-    host_name       VARCHAR(255)    NULL,     
-    os_name         VARCHAR(100)    NULL,     
+    host_name       VARCHAR(255)    NULL,      
     first_seen      DATETIME        NOT NULL,
     last_seen       DATETIME        NOT NULL,
     last_scan_id    VARCHAR(64)     NULL,     -- 문자열 scan_id 저장용
@@ -45,16 +44,17 @@ CREATE TABLE IF NOT EXISTS ports (
     product         VARCHAR(100)    NULL,       
     version         VARCHAR(100)    NULL,       
     banner          TEXT            NULL,       
-    is_open         TINYINT(1)      NOT NULL DEFAULT 1,
+    state           ENUM('open', 'closed') NOT NULL DEFAULT 'closed',
     first_seen      DATETIME        NOT NULL,
     last_seen       DATETIME        NOT NULL,
-    last_scan_id    VARCHAR(64)     NULL,      -- 문자열 scan_id 저장용
+    last_scan_id    VARCHAR(64)     NULL,
 
     PRIMARY KEY (id),
     UNIQUE KEY uq_ports_host_port_proto (host_id, port, protocol),
     INDEX idx_ports_host (host_id),
     INDEX idx_ports_service (service),
     INDEX idx_ports_last_seen (last_seen),
+
     CONSTRAINT fk_ports_host
         FOREIGN KEY (host_id) REFERENCES hosts(id)
         ON DELETE CASCADE
@@ -81,3 +81,8 @@ CREATE TABLE IF NOT EXISTS vulns (
         FOREIGN KEY (port_id) REFERENCES ports(id)
         ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+USE port_scan;
+
+SHOW COLUMNS FROM hosts;

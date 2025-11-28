@@ -12,6 +12,12 @@ def is_valid_ip(ip: str) -> bool:
     except ValueError:
         return False
 
+def resolve_hostname(ip: str) -> str | None:
+    try:
+        host, aliases, _ = socket.gethostbyaddr(ip)
+        return host              # 문자열만 반환
+    except socket.herror:
+        return None              # 역방향 DNS 없으면 None
 
 def parse_ports(ports: str | Iterable[int]) -> List[int]:
     """
@@ -56,3 +62,41 @@ def tcp_connect(host: str, port: int, timeout: float = 1.0) -> socket.socket | N
         return sock
     except OSError:
         return None
+
+
+def udp_connect(host: str, port: int, timeout: float = 1.0) -> str:
+    """
+    단순 UDP 스캔 함수.
+    반환값:
+        'open'          : 응답 패킷을 받은 경우
+        'closed'        : ICMP Port Unreachable 응답
+        'open|filtered' : 응답 없음(UDP 특성상 구분 불가)
+    """
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+
+        # UDP는 연결 개념이 없어 바로 sendto()로 패킷 전송
+        sock.sendto(b"", (host, port))
+
+        try:
+            data, addr = sock.recvfrom(1024)
+            # 응답 패킷 수신 → open
+            return "open"
+        except socket.timeout:
+            # 응답 없음 → open|filtered
+            return "open|filtered"
+        except OSError as e:
+            # ICMP Port Unreachable (Win/Linux 에러 코드 다름)
+            if e.errno in (111, 113, 10061):
+                return "closed"
+            return "open|filtered"
+
+    except Exception:
+        return "closed"
+    finally:
+        try:
+            sock.close()
+        except:
+            pass
