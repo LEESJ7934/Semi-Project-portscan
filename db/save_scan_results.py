@@ -42,14 +42,13 @@ def save_scan_results(scan_result: dict):
             port = r["port"]
 
             # 🔥🔥🔥 여기서 필터링: PORT_SERVICE_MAP 에 없는 포트는 저장 안 함
-            if port not in PORT_SERVICE_MAP:
+            if r["state"] != "open":
                 continue
 
             protocol = r["protocol"]
             state = r["state"]
             service = r.get("service")
             banner = r.get("banner")
-            product = r.get("product")
             version = r.get("version")
             upsert_port(
                 conn,
@@ -57,7 +56,6 @@ def save_scan_results(scan_result: dict):
                 port=port,
                 protocol=protocol,
                 service=service,
-                product=product,
                 version=version,
                 banner=banner,
                 last_scan_id=scan_id,

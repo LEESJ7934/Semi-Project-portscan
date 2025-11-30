@@ -17,7 +17,6 @@ class PortScanResult:
     state: str     # "open" / "closed" / "open|filtered"
     banner: str | None = None
     service: str | None = None
-    product: str | None = None
     version: str | None = None
 
     def to_dict(self) -> Dict:
@@ -35,7 +34,6 @@ def scan_single_port(host: str, port: int, timeout: float = 1.0) -> PortScanResu
             state="closed",
             banner=None,
             service=guess_service(port),
-            product=None,
             version=None
         )
 
@@ -59,7 +57,6 @@ def scan_single_port(host: str, port: int, timeout: float = 1.0) -> PortScanResu
         state="open",
         banner=banner,
         service=service,
-        product=service,  
         version=version
     )
 

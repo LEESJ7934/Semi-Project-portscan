@@ -40,10 +40,9 @@ CREATE TABLE IF NOT EXISTS ports (
     host_id         BIGINT UNSIGNED NOT NULL,
     port            INT UNSIGNED    NOT NULL,
     protocol        ENUM('tcp','udp') NOT NULL,
-    service         VARCHAR(100)    NULL,       
-    product         VARCHAR(100)    NULL,       
-    version         VARCHAR(100)    NULL,       
-    banner          TEXT            NULL,       
+    service         VARCHAR(100)    NULL,
+    version         VARCHAR(100)    NULL,
+    banner          TEXT            NULL,
     state           ENUM('open', 'closed') NOT NULL DEFAULT 'closed',
     first_seen      DATETIME        NOT NULL,
     last_seen       DATETIME        NOT NULL,
@@ -59,6 +58,7 @@ CREATE TABLE IF NOT EXISTS ports (
         FOREIGN KEY (host_id) REFERENCES hosts(id)
         ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 
 -- 4) 취약점 테이블
 CREATE TABLE IF NOT EXISTS vulns (
@@ -82,7 +82,3 @@ CREATE TABLE IF NOT EXISTS vulns (
         ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-
-USE port_scan;
-
-SHOW COLUMNS FROM hosts;

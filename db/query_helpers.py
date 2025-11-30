@@ -44,7 +44,6 @@ def upsert_port(
     port: int,
     protocol: str,
     service: Optional[str] = None,
-    product: Optional[str] = None,
     version: Optional[str] = None,
     banner: Optional[str] = None,
     last_scan_id: Optional[str] = None,
@@ -58,13 +57,12 @@ def upsert_port(
 
     sql = """
     INSERT INTO ports (
-        host_id, port, protocol, service, product, version,
+        host_id, port, protocol, service, version,
         banner, state, first_seen, last_seen, last_scan_id
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON DUPLICATE KEY UPDATE
         service = COALESCE(VALUES(service), service),
-        product = COALESCE(VALUES(product), product),
         version = COALESCE(VALUES(version), version),
         banner = COALESCE(VALUES(banner), banner),
         state = VALUES(state),
@@ -80,7 +78,6 @@ def upsert_port(
                 port,
                 protocol,
                 service,
-                product,
                 version,
                 banner,
                 state,

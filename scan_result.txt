@@ -1,0 +1,7 @@
+Starting Scan at 2025-11-30T07:03:49.697162
+Scan report for 127.0.0.1
+Host is up
+closed ports: 9
+PORT	STATE	SERVICE
+80/tcp	open	http
+3306/tcp	open	mysql
