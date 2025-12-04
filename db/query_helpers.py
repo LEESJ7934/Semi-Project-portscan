@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 from mysql.connector import MySQLConnection
 from .db_client import get_connection
+from typing import List, Dict, Any
 
 
 def upsert_host(
@@ -187,3 +188,43 @@ def update_vuln_status(
 
     with conn.cursor() as cur:
         cur.execute(sql, (status, now, vuln_id))
+
+def get_all_ports() -> List[Dict[str, Any]]:
+    """
+    ports 테이블의 모든 레코드를 가져오고,
+    analysis/vuln_mapper.py에서 사용할 수 있도록 dict 형태로 반환한다.
+    """
+    conn = get_connection()
+    sql = """
+    SELECT
+        id,
+        host_id,
+        port,
+        protocol,
+        service,
+        version,
+        banner,
+        state,
+        last_scan_id
+    FROM ports;
+    """
+
+    results = []
+    with conn.cursor(dictionary=True) as cur:
+        cur.execute(sql)
+        rows = cur.fetchall()
+        for row in rows:
+            results.append({
+                "id": row["id"],
+                "host_id": row["host_id"],
+                "port": row["port"],
+                "protocol": row["protocol"],
+                "service": row["service"],
+                "version": row["version"],
+                "banner": row["banner"],
+                "state": row["state"],
+                "last_scan_id": row["last_scan_id"],
+            })
+
+    conn.close()
+    return results

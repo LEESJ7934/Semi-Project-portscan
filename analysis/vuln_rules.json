@@ -1,0 +1,42 @@
+[
+  {
+    "id": "rule_ftp_vsftpd_3_0_5",
+    "service": "ftp",
+    "version_regex": "^3\\.0\\.5$",
+    "cve": "NONE",
+    "severity": "LOW",
+    "title": "vsftpd 3.0.5 detected"
+  },
+  {
+    "id": "rule_ssh_openssh_8_9",
+    "service": "ssh",
+    "version_regex": "^8\\.9",
+    "cve": "CVE-2023-25136",
+    "severity": "MEDIUM",
+    "title": "OpenSSH 8.x Vulnerability"
+  },
+  {
+    "id": "rule_telnet_default",
+    "service": "telnet",
+    "version_regex": ".*",
+    "cve": "CVE-1999-0613",
+    "severity": "HIGH",
+    "title": "Telnet Service Exposure"
+  },
+  {
+    "id": "rule_apache_2_4_25_cve_2017_3169",
+    "service": "http",
+    "version_regex": "^2\\.4\\.25$",
+    "cve": "CVE-2017-3169",
+    "severity": "HIGH",
+    "title": "Apache 2.4.25 - Access Control Bypass"
+  },
+  {
+    "id": "rule_apache_2_4_25_cve_2017_7679",
+    "service": "http",
+    "version_regex": "^2\\.4\\.25$",
+    "cve": "CVE-2017-7679",
+    "severity": "CRITICAL",
+    "title": "Apache 2.4.25 - MIME Memory Corruption"
+  }
+]
