@@ -4,7 +4,7 @@ CREATE DATABASE IF NOT EXISTS port_scan
 
 USE port_scan;
 
--- 1) 스캔 실행 기록
+-- 1) 스캔 실행 기록 테이블
 CREATE TABLE IF NOT EXISTS scans (
     id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     target          VARCHAR(255)    NOT NULL,   
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS hosts (
     host_name       VARCHAR(255)    NULL,      
     first_seen      DATETIME        NOT NULL,
     last_seen       DATETIME        NOT NULL,
-    last_scan_id    VARCHAR(64)     NULL,     -- 문자열 scan_id 저장용
+    last_scan_id    VARCHAR(64)     NULL,     
 
     PRIMARY KEY (id),
     UNIQUE KEY uq_hosts_ip (host_ip),
@@ -68,7 +68,8 @@ CREATE TABLE IF NOT EXISTS vulns (
     title           VARCHAR(255)    NOT NULL,
     severity        ENUM('LOW','MEDIUM','HIGH','CRITICAL') NOT NULL,
     epss            DECIMAL(5,4)    NULL,       
-    status          ENUM('POTENTIAL','CONFIRMED','REJECTED') NOT NULL DEFAULT 'POTENTIAL',
+    status          ENUM('POTENTIAL','CONFIRMED','REJECTED') 
+    NOT NULL DEFAULT 'POTENTIAL',
     source          VARCHAR(100)    NULL,       
     created_at      DATETIME        NOT NULL,
     updated_at      DATETIME        NOT NULL,
@@ -82,3 +83,4 @@ CREATE TABLE IF NOT EXISTS vulns (
         ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+ALTER TABLE ports MODIFY version VARCHAR(512);

@@ -83,9 +83,6 @@ def threaded_scan(
     timeout: float = 1.0,
     max_workers: int = 100,
 ) -> List[Dict]:
-    """
-    단일 IP에 대해 멀티스레드 TCP 스캔.
-    """
     port_list = parse_ports(ports)
     results: List[PortScanResult] = []
 

@@ -40,11 +40,11 @@ PORT_SERVICE_MAP: dict[int, tuple[str, str]] = {
     500: ("udp", "ike"),
     514: ("udp", "syslog"),
     520: ("udp", "rip"),
-    1900: ("udp", "upnp"),          # ← Nmap 결과 반영
-    4500: ("udp", "nat-t-ike"),     # ← Nmap 결과 반영
-    5050: ("udp", "mmcc"),          # ← Nmap 결과 반영
-    5353: ("udp", "zeroconf"),      # ← Nmap 결과 반영
-    5355: ("udp", "llmnr"),         # ← Nmap 결과 반영
+    1900: ("udp", "upnp"),          
+    4500: ("udp", "nat-t-ike"),   
+    5050: ("udp", "mmcc"),        
+    5353: ("udp", "zeroconf"),     
+    5355: ("udp", "llmnr"),        
     11211: ("udp", "memcached"),
 }
 
@@ -54,17 +54,7 @@ def guess_service(port: int) -> str | None:
     """포트 번호로 기본 서비스 이름 추정."""
     entry = PORT_SERVICE_MAP.get(port)
     if entry is None:
-        return None
+        return "unknown"
     return entry[1]   # 서비스 이름
 
 
-# ---------- 자동 TCP/UDP 포트 리스트 생성 ----------
-TCP_PORTS = [
-    port for port, (proto, _) in PORT_SERVICE_MAP.items()
-    if proto in ("tcp", "both")
-]
-
-UDP_PORTS = [
-    port for port, (proto, _) in PORT_SERVICE_MAP.items()
-    if proto in ("udp", "both")
-]

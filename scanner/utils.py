@@ -65,14 +65,6 @@ def tcp_connect(host: str, port: int, timeout: float = 1.0) -> socket.socket | N
 
 
 def udp_connect(host: str, port: int, timeout: float = 1.0) -> str:
-    """
-    단순 UDP 스캔 함수.
-    반환값:
-        'open'          : 응답 패킷을 받은 경우
-        'closed'        : ICMP Port Unreachable 응답
-        'open|filtered' : 응답 없음(UDP 특성상 구분 불가)
-    """
-
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.settimeout(timeout)

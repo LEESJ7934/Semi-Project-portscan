@@ -41,7 +41,6 @@ def save_scan_results(scan_result: dict):
         for r in t["results"]: 
             port = r["port"]
 
-            # 🔥🔥🔥 여기서 필터링: PORT_SERVICE_MAP 에 없는 포트는 저장 안 함
             if r["state"] != "open":
                 continue
 
@@ -59,7 +58,7 @@ def save_scan_results(scan_result: dict):
                 version=version,
                 banner=banner,
                 last_scan_id=scan_id,
-                state=state,    # open / closed / open|filtered
+                state=state,   
             )
 
     conn.commit()

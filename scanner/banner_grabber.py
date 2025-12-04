@@ -10,8 +10,7 @@ def grab_banner(host: str, port: int, service: str, timeout: float = 1.0) -> str
         sock.connect((host, port))
 
         probe = PROBES.get(service)
-
-        # SSH는 접속 시 서버가 먼저 배너를 보냄
+        
         if probe:
             sock.sendall(probe)
 

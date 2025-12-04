@@ -1,17 +1,13 @@
 # scanner/scan_runner.py
 from __future__ import annotations
-
 import uuid
-from datetime import datetime
 from typing import List, Dict, Iterable
-
+from datetime import datetime, timedelta, timezone
 from .tcp_scanner import sequential_scan, threaded_scan          # TCP scanner
 from .udp_scanner import sequential_udp_scan, threaded_udp_scan  # UDP scanner
 from .utils import is_valid_ip, parse_ports
-from .service_fingerprints import TCP_PORTS, UDP_PORTS
-# 자동 포트 분리 로직 import
-from .service_fingerprints import TCP_PORTS, UDP_PORTS
 
+KST = timezone(timedelta(hours=9))
 
 def generate_scan_id() -> str:
     ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
@@ -29,16 +25,15 @@ def run_scan(
     udp_only: bool = False, 
     scan_type: str = "tcp",     # UDP only
 ) -> Dict:
-
+    started_at = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+    
     scan_id = generate_scan_id()
-    started_at = datetime.utcnow().isoformat()
 
     # 사용자 포트 범위
     port_list = parse_ports(ports)
 
-    # 자동 TCP/UDP 필터링
-    tcp_port_list = [p for p in port_list if p in TCP_PORTS]
-    udp_port_list = [p for p in port_list if p in UDP_PORTS]
+    tcp_port_list = port_list
+    udp_port_list = port_list
 
     targets_results: List[Dict] = []
 
@@ -89,8 +84,7 @@ def run_scan(
             "results": merged,
         })
 
-    finished_at = datetime.utcnow().isoformat()
-
+    finished_at = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
     return {
         "scan_id": scan_id,
         "scan_type": scan_type, 
@@ -98,3 +92,5 @@ def run_scan(
         "finished_at": finished_at,
         "targets": targets_results,
     }
+ 
+
