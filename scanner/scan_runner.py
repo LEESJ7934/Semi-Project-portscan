@@ -91,6 +91,7 @@ def run_scan(
         "started_at": started_at,
         "finished_at": finished_at,
         "targets": targets_results,
+        "port_range": ports,
     }
  
 
