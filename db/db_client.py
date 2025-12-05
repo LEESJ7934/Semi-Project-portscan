@@ -34,3 +34,21 @@ def get_connection() -> MySQLConnection:
         autocommit=False,  # 트랜잭션은 코드에서 관리, autocommit=True면 각 SQL이 실행될 때마다 즉시 DB에 반영된다.
     )
     return conn
+
+
+class DBClient:
+    def __init__(self):
+        self.conn = get_connection()
+        self.cursor = self.conn.cursor(dictionary=True)
+
+    def fetch_all(self, query, params=None):
+        self.cursor.execute(query, params or ())
+        return self.cursor.fetchall()
+
+    def execute(self, query, params=None):
+        self.cursor.execute(query, params or ())
+        self.conn.commit()  # autocommit=False 이므로 commit 필요
+
+    def close(self):
+        self.cursor.close()
+        self.conn.close()

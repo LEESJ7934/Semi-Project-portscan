@@ -24,19 +24,19 @@
     "title": "Telnet Service Exposure"
   },
   {
-    "id": "rule_apache_2_4_25_cve_2017_3169",
+    "id": "rule_dvwa_sqli",
     "service": "http",
-    "version_regex": "^2\\.4\\.25$",
-    "cve": "CVE-2017-3169",
+    "version_regex": ".*",
+    "cve": "CVE-2012-1823",
     "severity": "HIGH",
-    "title": "Apache 2.4.25 - Access Control Bypass"
+    "title": "DVWA SQL Injection (mapped to PHP CGI RCE CVE-2012-1823)"
   },
   {
-    "id": "rule_apache_2_4_25_cve_2017_7679",
+    "id": "rule_dvwa_fileupload",
     "service": "http",
-    "version_regex": "^2\\.4\\.25$",
-    "cve": "CVE-2017-7679",
+    "version_regex": ".*",
+    "cve": "CVE-2020-2551",
     "severity": "CRITICAL",
-    "title": "Apache 2.4.25 - MIME Memory Corruption"
+    "title": "DVWA File Upload Vulnerability (mapped to WebLogic CVE-2020-2551)"
   }
 ]
