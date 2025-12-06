@@ -3,9 +3,9 @@
     "id": "rule_ftp_vsftpd_3_0_5",
     "service": "ftp",
     "version_regex": "^3\\.0\\.5$",
-    "cve": "NONE",
+    "cve": "CVE-1999-0497",
     "severity": "LOW",
-    "title": "vsftpd 3.0.5 detected"
+    "title": "Anonymous FTP writable"
   },
   {
     "id": "rule_ssh_openssh_8_9",
