@@ -26,7 +26,7 @@ def match_rule(port_record: Dict[str, Any], rule: Dict[str, Any]):
 
     return True
 
-def map_vulns(port_records: List[Dict[str, Any]], rule_path="analysis/vuln_rules.json"):
+def map_vulns(port_records, rule_path="analysis/vuln_rules.json"):
     rules = load_rules(rule_path)
     results = []
 
@@ -35,9 +35,11 @@ def map_vulns(port_records: List[Dict[str, Any]], rule_path="analysis/vuln_rules
             if match_rule(p, r):
                 results.append({
                     "port_id": p["id"],
-                    "cve_id": r["cve"],
-                    "title": r["title"],
-                    "severity": r["severity"],
-                    "rule_id": r["id"]
+                    "cve_id": r.get("cve", "NONE"),
+                    "title": r.get("title", "Unknown Vulnerability"),
+                    "severity": r.get("severity", "LOW"),
+                    "status": r.get("status", "POTENTIAL"),       # 기본값 자동
+                    "source": r.get("id", "rule_unknown"),        # ★ id를 source로 사용
+                    "rule_id": r.get("id"),
                 })
     return results

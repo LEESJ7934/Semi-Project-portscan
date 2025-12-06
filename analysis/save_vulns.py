@@ -1,41 +1,41 @@
 # analysis/save_vulns.py
-
-from db.db_client import get_connection
 from datetime import datetime
+from db.db_client import get_connection
 
-def save_vulns(vuln_list):
 
-    if not vuln_list:
-        return
-
-    conn = get_connection()
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-
+def save_vulns(vulns):
+    """
+    DB vulns 테이블에 취약점 저장.
+    EPSS + CVSS + Risk 모두 저장.
+    """
     sql = """
-    INSERT INTO vulns (
-        port_id, cve_id, title, severity, epss, status, source, created_at, updated_at
-    )
-    VALUES (
-        %s, %s, %s, %s, %s, 'POTENTIAL', %s, %s, %s
-    )
+    INSERT INTO vulns 
+    (port_id, cve_id, title, severity, epss, cvss, risk, status, source, created_at, updated_at)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
 
+    conn = get_connection()
     with conn.cursor() as cur:
-        for v in vuln_list:
+        for v in vulns:
+            port_id = v["port_id"]
+            cve_id = v.get("cve_id", "NONE")
+            title = v.get("title", "Unknown Vulnerability")
+            severity = v.get("severity", "LOW")
+            epss = float(v.get("epss", 0.0))
+            cvss = float(v.get("cvss", 0.0))
+            risk = float(v.get("risk", 0.0))
+            status = v.get("status", "POTENTIAL")
+            source = v.get("source", "auto_rule")
 
-            # severity를 ENUM 형식에 맞게 대문자로 변환
-            sev = v["severity"].upper()
+            now = datetime.utcnow()
 
             cur.execute(sql, (
-                v["port_id"],
-                v["cve_id"],
-                v["title"],
-                sev,
-                v["epss"],        # nullable OK
-                v["rule_id"],     # source = rule_id
-                now,              # created_at
-                now               # updated_at
+                port_id, cve_id, title, severity,
+                epss, cvss, risk, status, source,
+                now, now
             ))
 
     conn.commit()
     conn.close()
+
+    print("[+] Vulnerabilities saved with CVSS and Risk")
