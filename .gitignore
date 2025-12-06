@@ -1,0 +1,15 @@
+# Environment files
+.env
+*.env
+docker/env/db.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Logs
+logs/
+logs/*.log
+
+# Reports
+reports/
