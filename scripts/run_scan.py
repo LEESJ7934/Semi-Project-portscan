@@ -10,14 +10,20 @@ def main():
     parser = argparse.ArgumentParser(description="Custom Nmap-like Scanner")
     sub = parser.add_subparsers(dest="command")
     scan_parser = sub.add_parser("scan", help="run scanner")
+
     # 포트 범위는 고정 (원하면 변경)
     scan_parser.add_argument("--ports", default="1-1024", help="Port range (fixed)")
-    scan_parser.add_argument("--target", required=True,
-                             help="IP or domain to scan")
-    scan_parser.add_argument("-sT", action="store_true",
-                             help="TCP scan")
-    scan_parser.add_argument("-sU", action="store_true",
-                             help="UDP scan")
+    scan_parser.add_argument("--target", required=True, help="IP or domain to scan")
+    scan_parser.add_argument("-sT", action="store_true", help="TCP scan")
+    scan_parser.add_argument("-sU", action="store_true", help="UDP scan")
+
+    # [수정 1] 스텔스 옵션 추가
+    scan_parser.add_argument(
+        "--stealth",
+        action="store_true",
+        help="Enable TCP SYN Stealth Scan (Root required)",
+    )
+
     scan_parser.add_argument("--timeout", type=float, default=1.0)
     scan_parser.add_argument("--max-workers", type=int, default=100)
 
@@ -48,7 +54,7 @@ def main():
 
     # run_scan용 파라미터로 변환
     enable_udp = udp_enabled and tcp_enabled  # TCP+UDP
-    udp_only = (udp_enabled and not tcp_enabled)
+    udp_only = udp_enabled and not tcp_enabled
 
     # ------------------------------
     # 실행
@@ -62,6 +68,8 @@ def main():
         enable_udp=enable_udp,
         udp_only=udp_only,
         scan_type=scan_type,
+        # [수정 2] 스텔스 인자 전달
+        stealth=args.stealth,
     )
 
     # ------------------------------
@@ -90,8 +98,9 @@ def main():
 
     for r in sorted(port_results, key=lambda x: (x["protocol"], x["port"])):
         port = r["port"]
-        if port not in PORT_SERVICE_MAP:
-            continue
+
+        # [중요] 필터링 삭제됨 (사용자님 요청 반영)
+        # if port not in PORT_SERVICE_MAP: continue
 
         proto = r["protocol"]
         state = r["state"]

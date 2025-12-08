@@ -3,7 +3,6 @@
 # (protocol, service_name)
 # protocol: "tcp", "udp", "both"
 PORT_SERVICE_MAP: dict[int, tuple[str, str]] = {
-
     # -------- TCP 서비스 --------
     20: ("tcp", "ftp-data"),
     21: ("tcp", "ftp"),
@@ -15,10 +14,13 @@ PORT_SERVICE_MAP: dict[int, tuple[str, str]] = {
     143: ("tcp", "imap"),
     443: ("tcp", "https"),
     3306: ("tcp", "mysql"),
-
+    2121: ("tcp", "ftp"),  # 실습용 FTP
+    2222: ("tcp", "ssh"),  # 실습용 SSH
+    3330: ("tcp", "http"),  # Juice Shop
+    8088: ("tcp", "http"),  # DVWA
+    3307: ("tcp", "mysql"),  # Portscan DB (Docker)
     # -------- BOTH (TCP+UDP) --------
     53: ("both", "dns"),  # DNS는 TCP/UDP 둘 다 사용
-
     # -------- UDP 서비스 --------
     67: ("udp", "dhcp-server"),
     68: ("udp", "dhcp-client"),
@@ -43,16 +45,14 @@ def guess_service(port: int) -> str | None:
     entry = PORT_SERVICE_MAP.get(port)
     if entry is None:
         return None
-    return entry[1]   # 서비스 이름
+    return entry[1]  # 서비스 이름
 
 
 # ---------- 자동 TCP/UDP 포트 리스트 생성 ----------
 TCP_PORTS = [
-    port for port, (proto, _) in PORT_SERVICE_MAP.items()
-    if proto in ("tcp", "both")
+    port for port, (proto, _) in PORT_SERVICE_MAP.items() if proto in ("tcp", "both")
 ]
 
 UDP_PORTS = [
-    port for port, (proto, _) in PORT_SERVICE_MAP.items()
-    if proto in ("udp", "both")
+    port for port, (proto, _) in PORT_SERVICE_MAP.items() if proto in ("udp", "both")
 ]

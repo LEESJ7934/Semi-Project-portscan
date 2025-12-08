@@ -26,7 +26,7 @@ def upsert_host(
     with conn.cursor() as cur:
         cur.execute(
             sql,
-            (host_ip, host_name,now, now, last_scan_id),
+            (host_ip, host_name, now, now, last_scan_id),
         )
         if cur.lastrowid:
             host_id = cur.lastrowid
@@ -37,37 +37,35 @@ def upsert_host(
     return host_id
 
 
-
 def upsert_port(
     conn: MySQLConnection,
     host_id: int,
     port: int,
     protocol: str,
-    service: Optional[str] = None,
+    state: str,
+    service: str,
+    banner: Optional[str] = None,
     product: Optional[str] = None,
     version: Optional[str] = None,
-    banner: Optional[str] = None,
+    screenshot_path: Optional[str] = None,  # [추가] 인자 추가
     last_scan_id: Optional[str] = None,
-    state: str = "closed",
 ) -> int:
-
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-    # open / closed 정규화
-    state = "open" if state == "open" else "closed"
-
+    # [수정] screenshot_path 컬럼 추가
     sql = """
     INSERT INTO ports (
-        host_id, port, protocol, service, product, version,
-        banner, state, first_seen, last_seen, last_scan_id
+        host_id, port, protocol, state, service, banner, product, version, 
+        screenshot_path, first_seen, last_seen, last_scan_id
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON DUPLICATE KEY UPDATE
-        service = COALESCE(VALUES(service), service),
+        state = VALUES(state),
+        service = VALUES(service),
+        banner = COALESCE(VALUES(banner), banner),
         product = COALESCE(VALUES(product), product),
         version = COALESCE(VALUES(version), version),
-        banner = COALESCE(VALUES(banner), banner),
-        state = VALUES(state),
+        screenshot_path = COALESCE(VALUES(screenshot_path), screenshot_path), 
         last_seen = VALUES(last_seen),
         last_scan_id = VALUES(last_scan_id);
     """
@@ -79,29 +77,28 @@ def upsert_port(
                 host_id,
                 port,
                 protocol,
+                state,
                 service,
+                banner,
                 product,
                 version,
-                banner,
-                state,
+                screenshot_path,  # [추가] 값 전달
                 now,
                 now,
                 last_scan_id,
             ),
         )
-
+        # port_id를 반환해야 취약점(Vulns)을 연결할 수 있음
         if cur.lastrowid:
-            port_id = cur.lastrowid
+            return cur.lastrowid
         else:
+            # UPDATE인 경우 ID를 다시 조회
             cur.execute(
-                "SELECT id FROM ports WHERE host_id = %s AND port = %s AND protocol = %s",
+                "SELECT id FROM ports WHERE host_id=%s AND port=%s AND protocol=%s",
                 (host_id, port, protocol),
             )
             row = cur.fetchone()
-            port_id = row[0]
-
-    return port_id
-
+            return row[0] if row else 0
 
 
 def insert_scan(
@@ -112,16 +109,20 @@ def insert_scan(
     started_at: datetime,
     finished_at: Optional[datetime],
     status: str,
+    scan_id: str,  # [확인] 인자 있음
     config_snapshot: Optional[Dict[str, Any]] = None,
 ) -> int:
 
+    # [수정 포인트 1] 컬럼 목록에 scan_id 포함 (총 8개 컬럼)
     sql = """
     INSERT INTO scans (
         target, scan_type, port_range,
-        started_at, finished_at, status, config_snapshot
+        started_at, finished_at, status, scan_id, config_snapshot
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s);
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
     """
+    # [수정 포인트 2] VALUES에 %s가 8개인지 꼭 확인하세요!
+
     snapshot_json = json.dumps(config_snapshot) if config_snapshot is not None else None
 
     with conn.cursor() as cur:
@@ -134,12 +135,12 @@ def insert_scan(
                 started_at,
                 finished_at,
                 status,
-                snapshot_json,
+                scan_id,  # [확인] 데이터 7번째
+                snapshot_json,  # [확인] 데이터 8번째
             ),
         )
         scan_db_id = cur.lastrowid
     return scan_db_id
-
 
 
 def insert_vuln(
@@ -170,7 +171,6 @@ def insert_vuln(
         )
         vuln_id = cur.lastrowid
     return vuln_id
-
 
 
 def update_vuln_status(
