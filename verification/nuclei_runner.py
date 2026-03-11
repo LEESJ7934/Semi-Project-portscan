@@ -15,7 +15,7 @@ class NucleiRunner(BaseChecker):
         self,
         nuclei_path=r"C:\Users\Seung Jun\AppData\Local\Programs\nuclei\nuclei.exe",
         templates_root=r"C:\Users\Seung Jun\nuclei-templates",
-        dvwa_host="3.35.37.54",
+        dvwa_host="43.200.247.45",
         debug=False,
     ):
         self.nuclei_path = nuclei_path
@@ -38,29 +38,30 @@ class NucleiRunner(BaseChecker):
         port = port_record["port"]
         service = port_record.get("service", "")
 
-        if service == "http":
-            target = f"http://{ip}:{port}"
-        else:
-            target = f"{ip}:{port}"
+        if service not in ("http", "https"):
+            return {"status": "SKIP", "details": "NucleiRunner is only enabled for HTTP/HTTPS"}
 
-        cve_id = vuln_candidate.get("cve")
+        protocol = "https" if service == "https" else "http"
+        target = f"{protocol}://{ip}:{port}"
+
+        cve_id = vuln_candidate.get("cve") or vuln_candidate.get("cve_id")
         if not cve_id or cve_id == "NONE":
-            return {"status": "INVALID", "details": "No CVE provided"}
+            return {"status": "SKIP", "details": "No CVE provided"}
 
         try:
             template_path = self._resolve_template_path(cve_id)
         except FileNotFoundError as e:
-            return {"status": "INVALID", "details": str(e)}
+            return {"status": "SKIP", "details": str(e)}
 
         if not os.path.exists(template_path):
-            return {"status": "INVALID", "details": f"Template not found: {template_path}"}
+            return {"status": "ERROR", "details": f"Template not found: {template_path}"}
 
         cookie_header = None
-        if ip == self.dvwa_host and service == "http":
+        if ip == self.dvwa_host:
             try:
                 cookie_header = get_dvwa_cookie_header()
             except Exception as e:
-                return {"status": "INVALID", "details": f"DVWA login failed: {e}"}
+                return {"status": "ERROR", "details": f"DVWA login failed: {e}"}
 
         try:
             cmd = [
@@ -78,8 +79,8 @@ class NucleiRunner(BaseChecker):
             stdout = result.stdout.strip()
             stderr = result.stderr.strip()
 
-            if stderr and "error" in stderr.lower():
-                return {"status": "INVALID", "details": stderr}
+            if result.returncode != 0 and stderr:
+                return {"status": "ERROR", "details": stderr}
 
             if "0 matches" in stdout.lower() or "no results" in stdout.lower():
                 return {"status": "INVALID", "details": "No matches"}
@@ -90,4 +91,4 @@ class NucleiRunner(BaseChecker):
             return {"status": "INVALID", "details": "Empty output"}
 
         except Exception as e:
-            return {"status": "INVALID", "details": str(e)}
+            return {"status": "ERROR", "details": str(e)}

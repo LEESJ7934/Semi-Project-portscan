@@ -5,7 +5,7 @@
     "version_regex": "^3\\.0\\.5$",
     "cve": "CVE-1999-0497",
     "severity": "LOW",
-    "title": "Anonymous FTP writable"
+    "title": "Anonymous FTP login"
   },
   {
     "id": "rule_ssh_openssh_8_9",

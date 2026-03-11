@@ -2,7 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 
 
-DVWA_BASE_URL = "http://3.35.37.54"  # 필요하면 나중에 env로 뺄 것
+DVWA_BASE_URL = "http://43.200.247.45"  # 필요하면 나중에 env로 뺄 것
 LOGIN_CANDIDATES = [
     "/login.php",
     "/dvwa/login.php",

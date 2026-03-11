@@ -14,7 +14,6 @@ class ScreenshotChecker(BaseChecker):
         os.makedirs(self.screenshot_dir, exist_ok=True)
 
     def _create_browser(self):
-        """Headless Chrome 생성"""
         options = Options()
         options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
@@ -22,10 +21,8 @@ class ScreenshotChecker(BaseChecker):
         options.add_argument("--disable-gpu")
         options.add_argument("--window-size=1366,768")
 
-        # ⭐ Selenium 4 방식 (Service 사용)
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
-
         return driver
 
     def run_check(self, port_record, vuln_candidate):
@@ -34,27 +31,34 @@ class ScreenshotChecker(BaseChecker):
         service_name = port_record.get("service", "")
 
         if service_name not in ("http", "https"):
-            return {"status": "INVALID", "details": "Not a web service"}
+            return {"status": "SKIP", "details": "Not a web service"}
 
         protocol = "https" if service_name == "https" else "http"
         url = f"{protocol}://{ip}:{port}"
 
+        browser = None
         try:
             browser = self._create_browser()
             browser.get(url)
-
             time.sleep(2)
 
             filename = f"{ip}_{port}.png"
             save_path = os.path.join(self.screenshot_dir, filename)
 
             browser.save_screenshot(save_path)
-            browser.quit()
 
             return {
-                "status": "CONFIRMED",
-                "details": f"Screenshot saved: {save_path}"
+                "status": "POTENTIAL",
+                "details": f"Screenshot saved: {save_path}",
+                "evidence_path": save_path
             }
 
         except Exception as e:
             return {"status": "ERROR", "details": str(e)}
+
+        finally:
+            if browser:
+                try:
+                    browser.quit()
+                except Exception:
+                    pass
