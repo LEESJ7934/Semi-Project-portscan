@@ -15,26 +15,24 @@ class HTTPChecker(BaseChecker):
         try:
             resp = requests.get(url, timeout=self.timeout)
 
-            # HTTP 응답 코드 검사
-            if resp.status_code >= 200 and resp.status_code < 400:
+            if 200 <= resp.status_code < 400:
                 title = self._extract_title(resp.text)
                 return {
-                    "status": "CONFIRMED",
+                    "status": "POTENTIAL",
                     "details": f"HTTP {resp.status_code}, title='{title}'"
                 }
-            else:
-                return {
-                    "status": "INVALID",
-                    "details": f"HTTP {resp.status_code}"
-                }
+
+            return {
+                "status": "INVALID",
+                "details": f"HTTP {resp.status_code}"
+            }
 
         except Exception as e:
             return {
-                "status": "INVALID",
+                "status": "ERROR",
                 "details": f"HTTP request failed: {e}"
             }
 
-    # HTML title 추출용 간단 파서
     def _extract_title(self, html: str):
         html_lower = html.lower()
         if "<title>" in html_lower and "</title>" in html_lower:
