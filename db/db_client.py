@@ -1,39 +1,53 @@
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
 import mysql.connector
+from dotenv import load_dotenv
 from mysql.connector import MySQLConnection
 
 
-# 프로젝트 루트 기준으로 docker/env/db.env 불러오기
+# 프로젝트 루트의 .env를 불러옵니다.
+# .env는 .gitignore에 등록되어 GitHub에 올라가지 않습니다.
 BASE_DIR = Path(__file__).resolve().parents[1]
-ENV_PATH = BASE_DIR / "docker" / "env" / "db.env"
+ENV_PATH = BASE_DIR / ".env"
+
 if ENV_PATH.exists():
     load_dotenv(ENV_PATH)
 
 
 def get_connection() -> MySQLConnection:
-    """
-    MySQL 커넥션을 반환.
-    VSCode에서 실행하든, 나중에 Docker 컨테이너에서 실행하든
-    환경변수(DB_HOST, DB_PORT, DB_USER, ...)만 맞으면 동작하도록 고정.
-    """
+    """환경변수에 저장된 설정으로 MySQL에 연결합니다."""
+
     host = os.getenv("DB_HOST", "127.0.0.1")
     port = int(os.getenv("DB_PORT", "3306"))
-    user = os.getenv("DB_USER", "portuser")
-    password = os.getenv("DB_PASSWORD", "portpass")
+    user = os.getenv("DB_USER")
+    password = os.getenv("DB_PASSWORD")
     db_name = os.getenv("DB_NAME", "port_scan")
 
-    conn = mysql.connector.connect(
+    required_values = {
+        "DB_USER": user,
+        "DB_PASSWORD": password,
+    }
+
+    missing_values = [
+        name for name, value in required_values.items() if not value
+    ]
+
+    if missing_values:
+        missing_names = ", ".join(missing_values)
+        raise RuntimeError(
+            f"필수 환경변수가 없습니다: {missing_names}. "
+            f"프로젝트 루트의 .env 파일을 확인하세요."
+        )
+
+    return mysql.connector.connect(
         host=host,
         port=port,
         user=user,
         password=password,
         database=db_name,
-        autocommit=False,  # 트랜잭션은 코드에서 관리, autocommit=True면 각 SQL이 실행될 때마다 즉시 DB에 반영된다.
+        autocommit=False,
     )
-    return conn
 
 
 class DBClient:
@@ -47,7 +61,7 @@ class DBClient:
 
     def execute(self, query, params=None):
         self.cursor.execute(query, params or ())
-        self.conn.commit()  # autocommit=False 이므로 commit 필요
+        self.conn.commit()
 
     def close(self):
         self.cursor.close()

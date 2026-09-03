@@ -1,15 +1,25 @@
-# Environment files
+# Local secrets
 .env
-*.env
-docker/env/db.env
+.env.*
+!.env.example
 
-# Python cache
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
 
-# Logs
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Generated output
 logs/
-logs/*.log
-
-# Reports
 reports/
+screenshots/
+*.sqlite3
