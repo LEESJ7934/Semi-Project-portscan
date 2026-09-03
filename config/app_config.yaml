@@ -1,20 +1,15 @@
-# config/app_config.yaml
-
+# DB 계정정보는 프로젝트 루트의 .env에서 불러옵니다.
 db:
-  host: 127.0.0.1      # VSCode에서 개발용
-  port: 3307           # docker-compose 포트에 맞춰서
-  user: portuser
-  password: portpass
-  name: port_scan
+  source: environment
 
 scan_defaults:
-  target: "127.0.0.1"  # 기본 테스트용 타겟 임의로 만들어 놓은 aws ec2 서버
-  scan_type: "tcp"     # tcp / udp / 
-  port_range: "1-1024" # 문자열 그대로 넘겨서 파싱
-  timeout: 1.0         # 초 단위
-  max_workers: 100     # ThreadPoolExecutor 기본 스레드 수
-  banner_grab: true    # 배너 그랩 기본 ON
+  target: "127.0.0.1"
+  scan_type: "tcp"
+  port_range: "1-1024"
+  timeout: 1.0
+  max_workers: 100
+  banner_grab: true
 
 api:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 5000

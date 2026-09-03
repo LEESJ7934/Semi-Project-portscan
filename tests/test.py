@@ -1,44 +1,61 @@
 import os
 import sys
-import time
+from pathlib import Path
 
-# 프로젝트 루트 경로 추가
-sys.path.append(os.path.dirname(__file__))
+from dotenv import load_dotenv
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+load_dotenv(PROJECT_ROOT / ".env")
 
 from verification.screenshot import ScreenshotChecker
 
 
 def test_screenshot():
+    target = os.getenv("LAB_TARGET")
+
+    if not target:
+        print("[SKIP] LAB_TARGET is not configured.")
+        return
+
     checker = ScreenshotChecker()
 
-    # 테스트용 포트 레코드 (DVWA 80포트 예시)
     port_record = {
         "id": 999,
-        "host_ip": "3.35.37.54",
+        "host_ip": target,
         "port": 80,
-        "service": "http"
+        "service": "http",
     }
 
     vuln_candidate = {
         "id": 999,
         "cve": "NONE",
-        "title": "Dummy",
-        "source": "test"
+        "title": "Screenshot test",
+        "source": "test",
     }
 
     print("=== Screenshot Test Start ===")
 
-    result = checker.run_check(port_record, vuln_candidate)
+    result = checker.run_check(
+        port_record,
+        vuln_candidate,
+    )
 
-    print("=== RESULT ===")
+    print("=== Result ===")
     print(result)
 
-    # 캡처 파일 확인
-    screenshot_dir = "logs/screenshots"
-    files = os.listdir(screenshot_dir)
-    print("\n=== Saved Files in logs/screenshots ===")
-    for f in files:
-        print(f)
+    screenshot_dir = PROJECT_ROOT / "logs" / "screenshots"
+
+    if not screenshot_dir.exists():
+        print("No screenshots were saved.")
+        return
+
+    print("=== Saved Screenshots ===")
+
+    for file_path in screenshot_dir.iterdir():
+        if file_path.is_file():
+            print(file_path.name)
 
 
 if __name__ == "__main__":
