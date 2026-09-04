@@ -1,41 +1,78 @@
-# analysis/save_vulns.py
-from datetime import datetime
 from db.db_client import get_connection
+from db.query_helpers import upsert_vuln
+from db.statuses import VulnStatus
 
 
-def save_vulns(vulns):
-    """
-    DB vulns 테이블에 취약점 저장.
-    EPSS + CVSS + Risk 모두 저장.
-    """
-    sql = """
-    INSERT INTO vulns 
-    (port_id, cve_id, title, severity, epss, cvss, risk, status, source, created_at, updated_at)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """
+def as_float(
+    value,
+    default: float = 0.0,
+) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
+
+def save_vulns(
+    vulns: list[dict],
+) -> list[int]:
+    """
+    동일한 포트/CVE/출처는
+    중복 생성하지 않고 갱신합니다.
+    """
     conn = get_connection()
-    with conn.cursor() as cur:
-        for v in vulns:
-            port_id = v["port_id"]
-            cve_id = v.get("cve_id", "NONE")
-            title = v.get("title", "Unknown Vulnerability")
-            severity = v.get("severity", "LOW")
-            epss = float(v.get("epss", 0.0))
-            cvss = float(v.get("cvss", 0.0))
-            risk = float(v.get("risk", 0.0))
-            status = v.get("status", "POTENTIAL")
-            source = v.get("source", "auto_rule")
+    saved_ids = []
 
-            now = datetime.utcnow()
+    try:
+        for vuln in vulns:
+            vuln_id = upsert_vuln(
+                conn=conn,
+                port_id=vuln["port_id"],
+                cve_id=vuln.get(
+                    "cve_id",
+                    "NONE",
+                ),
+                title=vuln.get(
+                    "title",
+                    "Unknown Vulnerability",
+                ),
+                severity=vuln.get(
+                    "severity",
+                    "INFO",
+                ),
+                epss=as_float(
+                    vuln.get("epss")
+                ),
+                cvss=as_float(
+                    vuln.get("cvss")
+                ),
+                risk=as_float(
+                    vuln.get("risk")
+                ),
+                status=vuln.get(
+                    "status",
+                    VulnStatus.POTENTIAL.value,
+                ),
+                source=vuln.get(
+                    "source",
+                    "auto_rule",
+                ),
+            )
 
-            cur.execute(sql, (
-                port_id, cve_id, title, severity,
-                epss, cvss, risk, status, source,
-                now, now
-            ))
+            saved_ids.append(vuln_id)
 
-    conn.commit()
-    conn.close()
+        conn.commit()
 
-    print("[+] Vulnerabilities saved with CVSS and Risk")
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+    print(
+        "[+] 취약점 저장 완료: "
+        f"{len(saved_ids)}건 처리"
+    )
+
+    return saved_ids
