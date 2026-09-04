@@ -5,12 +5,12 @@ from typing import List, Dict, Iterable
 from datetime import datetime, timedelta, timezone
 from .tcp_scanner import sequential_scan, threaded_scan          # TCP scanner
 from .udp_scanner import sequential_udp_scan, threaded_udp_scan  # UDP scanner
-from .utils import is_valid_ip, parse_ports
+from .utils import format_port_range, is_valid_ip, parse_ports
 
 KST = timezone(timedelta(hours=9))
 
 def generate_scan_id() -> str:
-    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     u = uuid.uuid4().hex[:8]
     return f"scan-{ts}-{u}"
 
@@ -91,7 +91,6 @@ def run_scan(
         "started_at": started_at,
         "finished_at": finished_at,
         "targets": targets_results,
-        "port_range": ports,
+        "port_range": format_port_range(port_list),
     }
  
-

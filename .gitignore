@@ -23,3 +23,7 @@ logs/
 reports/
 screenshots/
 *.sqlite3
+
+# Local authorization scope
+config/scope.local.json
+config/scope.*.local.json
