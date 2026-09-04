@@ -1,54 +1,89 @@
-# 모든 모듈에서 공통으로 호출하는 DB 저장/조회 API 역할
 import json
-from datetime import datetime
-from typing import Optional, Dict, Any, List
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
+
 from mysql.connector import MySQLConnection
+
 from .db_client import get_connection
+from .statuses import (
+    ScanStatus,
+    VulnStatus,
+    normalize_scan_status,
+    normalize_vuln_status,
+    validate_vuln_transition,
+)
 
 
+VALID_SEVERITIES = {
+    "INFO",
+    "LOW",
+    "MEDIUM",
+    "HIGH",
+    "CRITICAL",
+}
 
-# -----------------------------
-# 1) HOST UPSERT
-# -----------------------------
+VALID_EVIDENCE_TYPES = {
+    "HTTP_RESPONSE",
+    "SCREENSHOT",
+    "NUCLEI",
+    "BANNER",
+    "MANUAL",
+    "ERROR_LOG",
+}
+
+
+def utc_now() -> datetime:
+    return datetime.now(
+        timezone.utc
+    ).replace(tzinfo=None)
+
+
 def upsert_host(
     conn: MySQLConnection,
     host_ip: str,
     host_name: Optional[str] = None,
     last_scan_id: Optional[int] = None,
 ) -> int:
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    now = utc_now()
 
     sql = """
-    INSERT INTO hosts (host_ip, host_name, first_seen, last_seen, last_scan_id)
+    INSERT INTO hosts (
+        host_ip,
+        host_name,
+        first_seen,
+        last_seen,
+        last_scan_id
+    )
     VALUES (%s, %s, %s, %s, %s)
     ON DUPLICATE KEY UPDATE
-        host_name = COALESCE(VALUES(host_name), host_name),
+        id = LAST_INSERT_ID(id),
+        host_name = COALESCE(
+            VALUES(host_name),
+            host_name
+        ),
         last_seen = VALUES(last_seen),
         last_scan_id = VALUES(last_scan_id);
     """
 
-    with conn.cursor() as cur:
-        cur.execute(sql, (host_ip, host_name, now, now, last_scan_id))
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (
+                host_ip,
+                host_name,
+                now,
+                now,
+                last_scan_id,
+            ),
+        )
+        return cursor.lastrowid
 
-        if cur.lastrowid:
-            host_id = cur.lastrowid
-        else:
-            cur.execute("SELECT id FROM hosts WHERE host_ip = %s", (host_ip,))
-            row = cur.fetchone()
-            host_id = row[0]
-
-    return host_id
 
 def get_all_ports() -> List[Dict[str, Any]]:
-    """
-    analysis/run_analysis.py에서 사용하는 함수.
-    ports + hosts 테이블을 JOIN하여, 포트 정보와 IP를 함께 가져온다.
-    """
-
     conn = get_connection()
 
     sql = """
-    SELECT 
+    SELECT
         p.id AS port_id,
         h.host_ip,
         p.port,
@@ -57,35 +92,21 @@ def get_all_ports() -> List[Dict[str, Any]]:
         p.version,
         p.banner,
         p.state
-    FROM ports p
-    JOIN hosts h ON p.host_id = h.id;
+    FROM ports AS p
+    JOIN hosts AS h
+        ON p.host_id = h.id;
     """
 
-    results = []
+    try:
+        with conn.cursor(
+            dictionary=True
+        ) as cursor:
+            cursor.execute(sql)
+            return cursor.fetchall()
+    finally:
+        conn.close()
 
-    with conn.cursor(dictionary=True) as cur:
-        cur.execute(sql)
-        rows = cur.fetchall()
 
-        for r in rows:
-            # run_analysis → vuln_mapper.map_vulns() 에 필요한 필드만 담아 전달
-            results.append({
-                "id": r["port_id"],
-                "host_ip": r["host_ip"],
-                "port": r["port"],
-                "protocol": r["protocol"],
-                "service": r["service"],
-                "version": r["version"],
-                "banner": r["banner"],
-                "state": r["state"],
-            })
-
-    conn.close()
-    return results
-
-# -----------------------------
-# 2) PORT UPSERT
-# -----------------------------
 def upsert_port(
     conn: MySQLConnection,
     host_id: int,
@@ -94,88 +115,298 @@ def upsert_port(
     service: Optional[str] = None,
     version: Optional[str] = None,
     banner: Optional[str] = None,
-    last_scan_id: Optional[str] = None,
+    last_scan_id: Optional[int] = None,
     state: str = "closed",
 ) -> int:
+    normalized_protocol = (
+        protocol
+        .strip()
+        .lower()
+    )
+    normalized_state = (
+        state
+        .strip()
+        .lower()
+    )
 
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    state = "open" if state == "open" else "closed"
+    if normalized_protocol not in {
+        "tcp",
+        "udp",
+    }:
+        raise ValueError(
+            "지원하지 않는 프로토콜입니다: "
+            f"{protocol}"
+        )
+
+    if normalized_state not in {
+        "open",
+        "closed",
+        "filtered",
+    }:
+        raise ValueError(
+            "지원하지 않는 포트 상태입니다: "
+            f"{state}"
+        )
+
+    now = utc_now()
 
     sql = """
     INSERT INTO ports (
-        host_id, port, protocol, service, version,
-        banner, state, first_seen, last_seen, last_scan_id
+        host_id,
+        port,
+        protocol,
+        service,
+        version,
+        banner,
+        state,
+        first_seen,
+        last_seen,
+        last_scan_id
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    VALUES (
+        %s, %s, %s, %s, %s,
+        %s, %s, %s, %s, %s
+    )
     ON DUPLICATE KEY UPDATE
-        service = COALESCE(VALUES(service), service),
-        version = COALESCE(VALUES(version), version),
-        banner = COALESCE(VALUES(banner), banner),
+        id = LAST_INSERT_ID(id),
+        service = COALESCE(
+            VALUES(service),
+            service
+        ),
+        version = COALESCE(
+            VALUES(version),
+            version
+        ),
+        banner = COALESCE(
+            VALUES(banner),
+            banner
+        ),
         state = VALUES(state),
         last_seen = VALUES(last_seen),
         last_scan_id = VALUES(last_scan_id);
     """
 
-    with conn.cursor() as cur:
-        cur.execute(
+    with conn.cursor() as cursor:
+        cursor.execute(
             sql,
-            (host_id, port, protocol, service, version,
-             banner, state, now, now, last_scan_id)
+            (
+                host_id,
+                port,
+                normalized_protocol,
+                service,
+                version,
+                banner,
+                normalized_state,
+                now,
+                now,
+                last_scan_id,
+            ),
         )
-
-        if cur.lastrowid:
-            port_id = cur.lastrowid
-        else:
-            cur.execute(
-                "SELECT id FROM ports WHERE host_id = %s AND port = %s AND protocol = %s",
-                (host_id, port, protocol),
-            )
-            row = cur.fetchone()
-            port_id = row[0]
-
-    return port_id
+        return cursor.lastrowid
 
 
-
-# -----------------------------
-# 3) SCAN 삽입
-# -----------------------------
 def insert_scan(
     conn: MySQLConnection,
+    scan_uid: str,
     target: str,
     scan_type: str,
     port_range: str,
     started_at: datetime,
     finished_at: Optional[datetime],
-    status: str,
-    config_snapshot: Optional[Dict[str, Any]] = None,
+    status: str | ScanStatus,
+    config_snapshot: Optional[
+        Dict[str, Any]
+    ] = None,
 ) -> int:
+    normalized_status = (
+        normalize_scan_status(status)
+    )
+
+    snapshot_json = (
+        json.dumps(
+            config_snapshot,
+            ensure_ascii=False,
+            default=str,
+        )
+        if config_snapshot
+        else None
+    )
 
     sql = """
     INSERT INTO scans (
-        target, scan_type, port_range,
-        started_at, finished_at, status, config_snapshot
+        scan_uid,
+        target,
+        scan_type,
+        port_range,
+        started_at,
+        finished_at,
+        status,
+        config_snapshot
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s);
+    VALUES (
+        %s, %s, %s, %s,
+        %s, %s, %s, %s
+    )
+    ON DUPLICATE KEY UPDATE
+        id = LAST_INSERT_ID(id),
+        finished_at = VALUES(finished_at),
+        status = VALUES(status),
+        config_snapshot = VALUES(
+            config_snapshot
+        );
     """
 
-    snapshot_json = json.dumps(config_snapshot) if config_snapshot else None
-
-    with conn.cursor() as cur:
-        cur.execute(
+    with conn.cursor() as cursor:
+        cursor.execute(
             sql,
-            (target, scan_type, port_range, started_at,
-             finished_at, status, snapshot_json),
+            (
+                scan_uid,
+                target,
+                scan_type,
+                port_range,
+                started_at,
+                finished_at,
+                normalized_status,
+                snapshot_json,
+            ),
         )
-        scan_db_id = cur.lastrowid
-
-    return scan_db_id
+        return cursor.lastrowid
 
 
+def upsert_vuln(
+    conn: MySQLConnection,
+    port_id: int,
+    cve_id: str,
+    title: str,
+    severity: str,
+    epss: Optional[float] = None,
+    cvss: Optional[float] = None,
+    risk: Optional[float] = None,
+    source: Optional[str] = None,
+    status: str | VulnStatus = VulnStatus.POTENTIAL,
+) -> int:
+    severity_value = (
+        severity
+        .strip()
+        .upper()
+    )
+    status_value = (
+        normalize_vuln_status(status)
+    )
+    cve_value = (
+        cve_id or "NONE"
+    ).strip().upper()
+    source_value = (
+        source or "unknown"
+    ).strip()
 
-# -----------------------------
-# 4) 취약점 INSERT
-# -----------------------------
+    if severity_value not in VALID_SEVERITIES:
+        raise ValueError(
+            "지원하지 않는 심각도입니다: "
+            f"{severity}"
+        )
+
+    now = utc_now()
+
+    sql = """
+    INSERT INTO vulns (
+        port_id,
+        cve_id,
+        title,
+        severity,
+        epss,
+        cvss,
+        risk,
+        status,
+        source,
+        first_detected_at,
+        last_detected_at,
+        created_at,
+        updated_at
+    )
+    VALUES (
+        %s, %s, %s, %s, %s,
+        %s, %s, %s, %s,
+        %s, %s, %s, %s
+    )
+    ON DUPLICATE KEY UPDATE
+        id = LAST_INSERT_ID(id),
+        title = VALUES(title),
+        severity = VALUES(severity),
+        epss = VALUES(epss),
+        cvss = VALUES(cvss),
+        risk = VALUES(risk),
+        status = CASE
+            WHEN vulns.status IN (
+                'CONFIRMED',
+                'NOT_APPLICABLE',
+                'FALSE_POSITIVE',
+                'RETEST_REQUIRED',
+                'CLOSED'
+            )
+            THEN vulns.status
+            ELSE VALUES(status)
+        END,
+        last_detected_at = VALUES(
+            last_detected_at
+        ),
+        updated_at = VALUES(
+            updated_at
+        );
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (
+                port_id,
+                cve_value,
+                title,
+                severity_value,
+                epss,
+                cvss,
+                risk,
+                status_value,
+                source_value,
+                now,
+                now,
+                now,
+                now,
+            ),
+        )
+
+        vuln_id = cursor.lastrowid
+
+        if cursor.rowcount == 1:
+            cursor.execute(
+                """
+                INSERT INTO
+                    remediation_history (
+                        vuln_id,
+                        from_status,
+                        to_status,
+                        action_type,
+                        reason,
+                        changed_by
+                    )
+                VALUES (
+                    %s,
+                    NULL,
+                    %s,
+                    'STATUS_CHANGE',
+                    '최초 탐지',
+                    'analysis'
+                );
+                """,
+                (
+                    vuln_id,
+                    status_value,
+                ),
+            )
+
+        return vuln_id
+
+
 def insert_vuln(
     conn: MySQLConnection,
     port_id: int,
@@ -184,101 +415,274 @@ def insert_vuln(
     severity: str,
     epss: Optional[float] = None,
     source: Optional[str] = None,
-    status: str = "POTENTIAL",
+    status: str | VulnStatus = VulnStatus.POTENTIAL,
 ) -> int:
+    return upsert_vuln(
+        conn=conn,
+        port_id=port_id,
+        cve_id=cve_id,
+        title=title,
+        severity=severity,
+        epss=epss,
+        source=source,
+        status=status,
+    )
 
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+def insert_vuln_evidence(
+    conn: MySQLConnection,
+    vuln_id: int,
+    checker: str,
+    evidence_type: str,
+    details: Optional[str] = None,
+    evidence_path: Optional[str] = None,
+    sha256: Optional[str] = None,
+) -> int:
+    type_value = (
+        evidence_type
+        .strip()
+        .upper()
+    )
+
+    if type_value not in VALID_EVIDENCE_TYPES:
+        raise ValueError(
+            "지원하지 않는 증적 유형입니다: "
+            f"{evidence_type}"
+        )
 
     sql = """
-    INSERT INTO vulns (
-        port_id, cve_id, title, severity, epss, status, source,
-        created_at, updated_at
+    INSERT INTO Vuln_evidence (
+        vuln_id,
+        checker,
+        evidence_type,
+        details,
+        evidence_path,
+        sha256
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+    VALUES (
+        %s, %s, %s,
+        %s, %s, %s
+    );
     """
 
-    with conn.cursor() as cur:
-        cur.execute(
+    with conn.cursor() as cursor:
+        cursor.execute(
             sql,
-            (port_id, cve_id, title, severity, epss, status, source, now, now),
+            (
+                vuln_id,
+                checker,
+                type_value,
+                details,
+                evidence_path,
+                sha256,
+            ),
         )
-        vuln_id = cur.lastrowid
-
-    return vuln_id
+        return cursor.lastrowid
 
 
+def transition_vuln_status(
+    conn: MySQLConnection,
+    vuln_id: int,
+    new_status: str | VulnStatus,
+    reason: Optional[str] = None,
+    changed_by: str = "system",
+) -> None:
+    with conn.cursor(
+        dictionary=True
+    ) as cursor:
+        cursor.execute(
+            """
+            SELECT status
+            FROM vulns
+            WHERE id = %s
+            FOR UPDATE;
+            """,
+            (vuln_id,),
+        )
 
-# -----------------------------
-# 5) 취약점 상태 UPDATE  (verification용)
-# -----------------------------
+        row = cursor.fetchone()
+
+        if not row:
+            raise LookupError(
+                "취약점 레코드를 "
+                "찾을 수 없습니다: "
+                f"{vuln_id}"
+            )
+
+        current, new = (
+            validate_vuln_transition(
+                row["status"],
+                new_status,
+            )
+        )
+
+        if current == new:
+            return
+
+        now = utc_now()
+
+        verified_at = (
+            now
+            if new in {
+                VulnStatus.CONFIRMED.value,
+                VulnStatus.NOT_APPLICABLE.value,
+                VulnStatus.FALSE_POSITIVE.value,
+            }
+            else None
+        )
+
+        closed_at = (
+            now
+            if new == VulnStatus.CLOSED.value
+            else None
+        )
+
+        cursor.execute(
+            """
+            UPDATE vulns
+            SET
+                status = %s,
+                verified_at = COALESCE(
+                    %s,
+                    verified_at
+                ),
+                closed_at = %s,
+                updated_at = %s
+            WHERE id = %s;
+            """,
+            (
+                new,
+                verified_at,
+                closed_at,
+                now,
+                vuln_id,
+            ),
+        )
+
+        if new == VulnStatus.RETEST_REQUIRED.value:
+            action_type = "RETEST_REQUEST"
+        elif new == VulnStatus.CLOSED.value:
+            action_type = "CLOSURE"
+        elif current == VulnStatus.CLOSED.value:
+            action_type = "REOPEN"
+        else:
+            action_type = "STATUS_CHANGE"
+
+        cursor.execute(
+            """
+            INSERT INTO
+                remediation_history (
+                    vuln_id,
+                    from_status,
+                    to_status,
+                    action_type,
+                    reason,
+                    changed_by
+                )
+            VALUES (
+                %s, %s, %s,
+                %s, %s, %s
+            );
+            """,
+            (
+                vuln_id,
+                current,
+                new,
+                action_type,
+                reason,
+                changed_by,
+            ),
+        )
+
+
 def update_vuln_verification(
     conn: MySQLConnection,
     vuln_id: int,
-    status: str,
+    status: str | VulnStatus,
+    reason: Optional[str] = None,
 ) -> None:
-
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-
-    sql = """
-    UPDATE vulns
-    SET status = %s,
-        updated_at = %s
-    WHERE id = %s;
-    """
-
-    with conn.cursor() as cur:
-        cur.execute(sql, (status, now, vuln_id))
+    transition_vuln_status(
+        conn=conn,
+        vuln_id=vuln_id,
+        new_status=status,
+        reason=reason,
+        changed_by="verification",
+    )
 
 
-
-# -----------------------------
-# ⭐ 6) 취약점 검증 대상 조회 (verification 전용)
-# -----------------------------
-def get_ports_with_vuln_candidates() -> List[Dict[str, Any]]:
-    """
-    hosts → ports → vulns JOIN하여
-    status = 'POTENTIAL' 인 취약점만 가져온다.
-    verification/run_verification.py 에서 사용됨.
-    """
-
-    conn = get_connection()
+def get_ports_with_vuln_candidates(
+    conn: Optional[
+        MySQLConnection
+    ] = None,
+) -> List[
+    Tuple[
+        Dict[str, Any],
+        Dict[str, Any],
+    ]
+]:
+    owns_connection = conn is None
+    active_connection = (
+        conn or get_connection()
+    )
 
     sql = """
     SELECT
-        p.id          AS port_id,
-        h.host_ip     AS host_ip,
-        p.port        AS port,
-        p.service     AS service,
-        v.id          AS vuln_id,
+        p.id AS port_id,
+        h.host_ip,
+        p.port,
+        p.protocol,
+        p.service,
+        v.id AS vuln_id,
         v.cve_id,
         v.title,
-        v.source
-    FROM vulns v
-    JOIN ports p  ON v.port_id = p.id
-    JOIN hosts h  ON p.host_id = h.id
-    WHERE v.status = 'POTENTIAL';
+        v.source,
+        v.status
+    FROM vulns AS v
+    JOIN ports AS p
+        ON v.port_id = p.id
+    JOIN hosts AS h
+        ON p.host_id = h.id
+    WHERE v.status IN (
+        'POTENTIAL',
+        'RETEST_REQUIRED'
+    );
     """
 
-    results = []
+    try:
+        with active_connection.cursor(
+            dictionary=True
+        ) as cursor:
+            cursor.execute(sql)
+            rows = cursor.fetchall()
 
-    with conn.cursor(dictionary=True) as cur:
-        cur.execute(sql)
-        rows = cur.fetchall()
+        results = []
 
-        for r in rows:
+        for row in rows:
             port_record = {
-                "id": r["port_id"],
-                "host_ip": r["host_ip"],
-                "port": r["port"],
-                "service": r["service"]
+                "id": row["port_id"],
+                "host_ip": row["host_ip"],
+                "port": row["port"],
+                "protocol": row["protocol"],
+                "service": row["service"],
             }
-            vuln_record = {
-                "id": r["vuln_id"],
-                "cve": r["cve_id"],
-                "title": r["title"],
-                "source": r["source"]
-            }
-            results.append((port_record, vuln_record))
 
-    conn.close()
-    return results
+            vuln_record = {
+                "id": row["vuln_id"],
+                "cve": row["cve_id"],
+                "title": row["title"],
+                "source": row["source"],
+                "status": row["status"],
+            }
+
+            results.append(
+                (
+                    port_record,
+                    vuln_record,
+                )
+            )
+
+        return results
+
+    finally:
+        if owns_connection:
+            active_connection.close()
