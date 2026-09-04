@@ -1,72 +1,287 @@
-# scripts/run_scan.py
+from __future__ import annotations
+
 import argparse
-from scanner.scan_runner import run_scan
-from db.save_scan_results import save_scan_results
-from scanner.service_fingerprints import guess_service
 from datetime import datetime
+from pathlib import Path
+from typing import Sequence
+
+from scanner.scan_runner import run_scan
+from scanner.scope import ScopePolicy, ScopeValidationError
+from scanner.service_fingerprints import guess_service
+from scanner.targets import ResolvedTarget, resolve_target_specs
+from scanner.utils import parse_ports
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Custom Scanner")
-    sub = parser.add_subparsers(dest="command")
-    scan_parser = sub.add_parser("scan", help="run scanner")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_SCOPE_FILE = (
+    PROJECT_ROOT / "config" / "scope.example.json"
+)
 
-    # 포트 범위
-    scan_parser.add_argument("--ports", default="1-1024", help="Port range (fixed)")
-    scan_parser.add_argument("--target", required=True, help="IP or domain to scan")
 
-    # 스캔 타입
-    scan_parser.add_argument("-sT", action="store_true", help="TCP scan")
-    scan_parser.add_argument("-sU", action="store_true", help="UDP scan")
-
-    # 성능 옵션
-    scan_parser.add_argument("--timeout", type=float, default=1.0)
-    scan_parser.add_argument("--max-workers", type=int, default=100)
-
-    # 서비스/버전 탐지
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Approved-scope infrastructure port scanner"
+        )
+    )
+    subparsers = parser.add_subparsers(dest="command")
+    scan_parser = subparsers.add_parser(
+        "scan",
+        help="run an approved scan",
+    )
+    scan_parser.add_argument(
+        "--target",
+        action="append",
+        required=True,
+        help=(
+            "IP, CIDR or hostname. Repeat the option for "
+            "multiple inputs."
+        ),
+    )
+    scan_parser.add_argument(
+        "--scope-file",
+        type=Path,
+        default=DEFAULT_SCOPE_FILE,
+        help=(
+            "JSON file containing the approved scan scope "
+            f"(default: {DEFAULT_SCOPE_FILE})"
+        ),
+    )
+    scan_parser.add_argument(
+        "--ports",
+        default="1-1024",
+        help="port expression such as 22,80,443 or 1-1024",
+    )
+    scan_parser.add_argument(
+        "-sT",
+        action="store_true",
+        help="TCP scan",
+    )
+    scan_parser.add_argument(
+        "-sU",
+        action="store_true",
+        help="UDP scan",
+    )
+    scan_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=1.0,
+    )
+    scan_parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=100,
+    )
     scan_parser.add_argument(
         "-sV",
         action="store_true",
-        help="Detect service versions (banner/metadata)",
+        help="display detected service versions",
     )
-
-    # 텍스트 출력 파일(-oN)
     scan_parser.add_argument(
         "-oN",
         "--output-normal",
+        type=Path,
         metavar="FILE",
-        help="Save normal text output to a text file",
+        help="save text output",
+    )
+    scan_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "validate and display the approved expansion "
+            "without scanning or using the database"
+        ),
+    )
+    return parser
+
+
+def determine_scan_mode(
+    tcp_flag: bool,
+    udp_flag: bool,
+) -> tuple[str, bool, bool]:
+    if not tcp_flag and not udp_flag:
+        return "tcp", False, False
+
+    if tcp_flag and udp_flag:
+        return "tcp+udp", True, False
+
+    if tcp_flag:
+        return "tcp", False, False
+
+    return "udp", False, True
+
+
+def attach_target_metadata(
+    results: dict,
+    targets: Sequence[ResolvedTarget],
+) -> None:
+    metadata_by_ip = {
+        target.ip: target for target in targets
+    }
+
+    for target_result in results["targets"]:
+        metadata = metadata_by_ip[target_result["ip"]]
+        target_result["input_target"] = (
+            metadata.input_target
+        )
+        target_result["resolution_type"] = (
+            metadata.resolution_type
+        )
+
+
+def print_scan_plan(
+    policy: ScopePolicy,
+    targets: Sequence[ResolvedTarget],
+    port_count: int,
+    worker_count: int,
+) -> None:
+    print(f"Authorization: {policy.authorization_ref}")
+    print(f"Scope: {policy.scope_uid} ({policy.name})")
+    print(f"Resolved targets: {len(targets)}")
+    print(f"Ports per target: {port_count}")
+    print(f"Max workers: {worker_count}")
+
+    for target in targets:
+        print(
+            f"  {target.input_target} -> {target.ip} "
+            f"[{target.resolution_type}]"
+        )
+
+
+def render_results(
+    results: dict,
+    show_versions: bool,
+) -> list[str]:
+    lines = [f"Starting Scan at {results['started_at']}"]
+
+    for target_info in results["targets"]:
+        ip = target_info["ip"]
+        lines.append("")
+        lines.append(f"Scan report for {ip}")
+
+        if target_info.get("error"):
+            lines.append(
+                f"[!] Error: {target_info['error']}"
+            )
+            continue
+
+        port_results = target_info["results"]
+        closed_count = sum(
+            1
+            for result in port_results
+            if result["state"] == "closed"
+        )
+        lines.append("Target scan completed")
+        lines.append(f"closed ports: {closed_count}")
+        header = (
+            "PORT\tSTATE\tSERVICE\tVERSION"
+            if show_versions
+            else "PORT\tSTATE\tSERVICE"
+        )
+        lines.append(header)
+
+        for result in sorted(
+            port_results,
+            key=lambda item: (
+                item["protocol"],
+                item["port"],
+            ),
+        ):
+            if result["state"] != "open":
+                continue
+
+            port = result["port"]
+            protocol = result["protocol"]
+            state = result["state"]
+            service = (
+                result.get("service")
+                or guess_service(port)
+                or "-"
+            )
+            version = result.get("version") or "-"
+
+            if show_versions:
+                lines.append(
+                    f"{port}/{protocol}\t{state}\t"
+                    f"{service:<15}\t{version}"
+                )
+            else:
+                lines.append(
+                    f"{port}/{protocol}\t{state}\t{service}"
+                )
+
+    started_at = datetime.fromisoformat(
+        results["started_at"]
+    )
+    finished_at = datetime.fromisoformat(
+        results["finished_at"]
+    )
+    duration = (
+        finished_at - started_at
+    ).total_seconds()
+    lines.append("")
+    lines.append(
+        "Scan done: "
+        f"{len(results['targets'])} target(s) in "
+        f"{duration:.3f} seconds"
+    )
+    return lines
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.command != "scan":
+        parser.print_help()
+        return 2
+
+    try:
+        if not 0 < args.timeout <= 30:
+            raise ValueError(
+                "timeout은 0초 초과 30초 이하여야 합니다."
+            )
+
+        policy = ScopePolicy.load(args.scope_file)
+        port_list = parse_ports(args.ports)
+
+        if not port_list:
+            raise ValueError(
+                "유효한 스캔 포트가 하나도 없습니다."
+            )
+
+        resolved_targets = resolve_target_specs(
+            args.target,
+            max_targets=policy.max_targets,
+        )
+        policy.authorize(
+            resolved_targets,
+            worker_count=args.max_workers,
+            port_count=len(port_list),
+        )
+    except (ValueError, ScopeValidationError) as exc:
+        parser.error(str(exc))
+
+    print_scan_plan(
+        policy,
+        resolved_targets,
+        len(port_list),
+        args.max_workers,
     )
 
-    args = parser.parse_args()
+    if args.dry_run:
+        print("[DRY-RUN] No scan or database write was performed.")
+        return 0
 
-    # 스캐너 사용 방법
-    if args.command != "scan":
-        print("Usage: python -m scripts.run_scan scan -sT -sU --target <IP>")
-        return
-
-    # Nmap 스타일 옵션 해석
-    if not args.sT and not args.sU:
-        scan_type = "tcp"
-        tcp_enabled = True
-        udp_enabled = False
-    else:
-        if args.sT and args.sU:
-            scan_type = "tcp+udp"
-        elif args.sT:
-            scan_type = "tcp"
-        elif args.sU:
-            scan_type = "udp"
-        tcp_enabled = args.sT
-        udp_enabled = args.sU
-
-    enable_udp = udp_enabled and tcp_enabled  # TCP+UDP
-    udp_only = (udp_enabled and not tcp_enabled)
-
-    # 실행
+    scan_type, enable_udp, udp_only = determine_scan_mode(
+        args.sT,
+        args.sU,
+    )
     results = run_scan(
-        targets=[args.target],
-        ports=args.ports,
+        targets=[
+            target.ip for target in resolved_targets
+        ],
+        ports=port_list,
         timeout=args.timeout,
         threaded=True,
         max_workers=args.max_workers,
@@ -74,85 +289,43 @@ def main():
         udp_only=udp_only,
         scan_type=scan_type,
     )
+    attach_target_metadata(results, resolved_targets)
+    results["requested_targets"] = list(args.target)
+    scope_snapshot = policy.to_snapshot()
+    results["scope"] = scope_snapshot
+    results["config"] = {
+        "ports": args.ports,
+        "timeout": args.timeout,
+        "max_workers": args.max_workers,
+        "service_version_requested": args.sV,
+        "scope": scope_snapshot,
+    }
 
-    # 출력 준비 (콘솔 + 파일 공통)
-    file_lines = []  # -oN 파일에 쓸 라인들
+    output_lines = render_results(
+        results,
+        show_versions=args.sV,
+    )
 
-    scan_id = results["scan_id"]
-    started_at = results["started_at"]
-    finished_at = results["finished_at"]
-    target_info = results["targets"][0]
-    ip = target_info["ip"]
-
-    # 문자열 → datetime 변환
-    started_dt = datetime.fromisoformat(started_at)
-    finished_dt = datetime.fromisoformat(finished_at)
-
-    # 시간 차이 계산
-    duration = (finished_dt - started_dt).total_seconds()
-
-    if "error" in target_info:
-        msg = f"[!] Error: {target_info['error']} (invalid IP: {ip})"
-        print(msg)
-        file_lines.append(msg)
-        return
-
-    port_results = target_info["results"]
-
-    line = f"Starting Scan at {started_at}"
-    print(line)
-    file_lines.append(line)
-
-    line = f"Scan report for {ip}"
-    print(line)
-    file_lines.append(line)
-
-    print("Host is up")
-    file_lines.append("Host is up")
-
-    closed = [r for r in port_results if r["state"] == "closed"]
-    line = f"closed ports: {len(closed)}"
-    print(line)
-    file_lines.append(line)
-
-    # 헤더
-    header = "PORT\tSTATE\tSERVICE\tVERSION" if args.sV else "PORT\tSTATE\tSERVICE"
-    print(header)
-    file_lines.append(header)
-
-    # 포트 출력
-    for r in sorted(port_results, key=lambda x: (x["protocol"], x["port"])):
-
-        # open 포트만 출력
-        if r["state"] != "open":
-            continue
-
-        port = r["port"]
-        proto = r["protocol"]
-        state = r["state"]
-
-        service = r.get("service") or guess_service(port) or "-"
-        version = r.get("version") or "-"
-
-        if args.sV:
-            line = f"{port}/{proto}\t{state}\t{service:<15}\t{version}"
-        else:
-            line = f"{port}/{proto}\t{state}\t{service}"
-
+    for line in output_lines:
         print(line)
-        file_lines.append(line)
 
-    # -oN 파일 저장
     if args.output_normal:
-        with open(args.output_normal, "w", encoding="utf-8") as f:
-            f.write("\n".join(file_lines))
-        print(f"\n[+] Saved output to {args.output_normal}")
+        args.output_normal.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        args.output_normal.write_text(
+            "\n".join(output_lines) + "\n",
+            encoding="utf-8",
+        )
+        print(f"[+] Saved output to {args.output_normal}")
 
-    # DB 저장
-    print(f"Scan done: 1 IP address (1 host up) scanned in {duration} seconds")
-    save_scan_results(results)
-    print("\n[+] DB 저장 완료")
+    from db.save_scan_results import save_scan_results
+
+    scan_db_id = save_scan_results(results)
+    print(f"[+] DB save completed (scan_id={scan_db_id})")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

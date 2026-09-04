@@ -98,6 +98,7 @@ ALTER TABLE vulns
         'POTENTIAL',
         'CONFIRMED',
         'REJECTED',
+        'INVALID',
         'CANDIDATE',
         'NOT_APPLICABLE',
         'FALSE_POSITIVE',
@@ -108,7 +109,10 @@ ALTER TABLE vulns
 
 UPDATE vulns
 SET status = 'FALSE_POSITIVE'
-WHERE status = 'REJECTED';
+WHERE status IN (
+    'REJECTED',
+    'INVALID'
+);
 
 UPDATE vulns
 SET source = 'unknown'

@@ -51,6 +51,27 @@ def parse_ports(ports: str | Iterable[int]) -> List[int]:
     return sorted(result)
 
 
+def format_port_range(ports: str | Iterable[int]) -> str:
+    """검사 포트 집합을 손실 없이 짧은 범위 문자열로 표현한다."""
+    port_list = parse_ports(ports)
+    if not port_list:
+        return ""
+
+    ranges: list[str] = []
+    start = end = port_list[0]
+
+    for port in port_list[1:]:
+        if port == end + 1:
+            end = port
+            continue
+
+        ranges.append(str(start) if start == end else f"{start}-{end}")
+        start = end = port
+
+    ranges.append(str(start) if start == end else f"{start}-{end}")
+    return ",".join(ranges)
+
+
 def tcp_connect(host: str, port: int, timeout: float = 1.0) -> socket.socket | None:
     """
     단순 TCP connect 함수.
