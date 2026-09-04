@@ -1,4 +1,4 @@
-# Port Scanner Database Schema V2
+# Port Scanner Database Schema V3
 
 ## 1. 개선 목적
 
@@ -13,13 +13,20 @@
 - 탐지부터 조치 완료까지 상태 추적
 - 검증 결과와 스크린샷의 증적 관리
 - 기존 V1 데이터 보존 마이그레이션
+- 승인된 스캔 범위와 정책 해시 보존
+- 자산 중요도·담당자·환경·데이터 등급 관리
+- 스캔별 자산 관찰 및 자산 변경 감사이력
 
 ## 2. 테이블 관계
 
 ```mermaid
 erDiagram
+    SCAN_SCOPES ||--o{ SCANS : authorizes
     SCANS ||--o{ HOSTS : "last scan"
+    SCANS ||--o{ SCAN_ASSETS : observes
     SCANS ||--o{ PORTS : "last scan"
+    HOSTS ||--o{ SCAN_ASSETS : appears
+    HOSTS ||--o{ ASSET_CHANGE_HISTORY : changes
     HOSTS ||--o{ PORTS : owns
     PORTS ||--o{ VULNS : exposes
     VULNS ||--o{ VULN_EVIDENCE : supports
@@ -27,6 +34,11 @@ erDiagram
 ```
 
 ## 3. 테이블별 역할
+
+### scan_scopes
+
+허가된 스캔 범위, 승인 근거, 유효기간과 실행 한도를 관리한다.
+`policy_sha256`은 정규화된 스코프 정책의 SHA-256 값이다.
 
 ### scans
 
@@ -36,9 +48,11 @@ erDiagram
 |---|---|
 | `id` | DB 내부 숫자 식별자 |
 | `scan_uid` | 애플리케이션에서 생성한 고유 스캔 ID |
+| `scope_id` | 승인 스코프의 DB ID |
 | `target` | 스캔 대상 |
+| `requested_targets` | 사용자가 입력한 IP·CIDR·호스트 목록 |
 | `scan_type` | TCP, UDP 또는 TCP+UDP |
-| `port_range` | 검사한 포트 범위 |
+| `port_range` | 검사한 포트 범위. V3.1부터 MEDIUMTEXT, 연속 포트는 `1-1024`처럼 저장 |
 | `status` | 스캔 실행 상태 |
 | `config_snapshot` | 실행 당시 설정 |
 
@@ -47,17 +61,37 @@ erDiagram
 
 ### hosts
 
-발견한 자산을 IP 주소 기준으로 관리한다.
+발견한 호스트를 자산대장으로 관리한다.
 
 | 필드 | 의미 |
 |---|---|
 | `host_ip` | IPv4 또는 IPv6 주소 |
+| `asset_uid` | IP와 독립된 UUID 자산 식별자 |
 | `host_name` | 역방향 DNS 조회 결과 |
+| `asset_name` | 업무 자산명 |
+| `asset_type` | 자산 유형 |
+| `environment` | 운영·개발·테스트 등 환경 |
+| `criticality` | 업무 중요도 |
+| `owner` | 담당자 |
+| `data_classification` | 데이터 분류 등급 |
+| `handles_personal_data` | 개인정보 처리 여부 |
+| `internet_exposed` | 인터넷 노출 여부 |
+| `lifecycle_status` | 활성·비활성·폐기 상태 |
 | `first_seen` | 최초 발견 시각 |
 | `last_seen` | 최근 발견 시각 |
 | `last_scan_id` | 최근 확인한 스캔의 DB ID |
 
 `host_ip`에는 UNIQUE 제약조건을 적용한다.
+
+### scan_assets
+
+한 번의 스캔과 여러 자산을 연결한다. 원래 입력값, IP 해석 방식,
+스캔 결과와 열린 포트 수를 실행별로 보존한다.
+
+### asset_change_history
+
+자산 중요도, 담당자, 환경, 수명주기 상태 등의 변경 전후 값과
+사유·변경자를 보존한다.
 
 ### ports
 
@@ -200,12 +234,32 @@ docker compose -f .\docker\docker-compose.yml up -d
 기존 문자열 `last_scan_id`는 삭제하지 않고
 `legacy_last_scan_uid`로 이름을 변경해 보존한다.
 
+V1 DB는 먼저 V2 마이그레이션과 검증을 완료해야 한다.
+
+### 기존 V2 DB
+
+DB 덤프를 만든 뒤 `sql/migration_v3.sql`을 한 번 실행한다.
+이어서 `sql/migration_v3_1.sql`로 포트 범위 저장 컬럼을 확장한다.
+자세한 명령과 검증 기준은 `docs/asset_management.md`에 있다.
+
+### 기존 V3 DB
+
+현재 DB를 백업한 뒤 `sql/migration_v3_1.sql`만 실행한다.
+`scans.port_range`를 VARCHAR(100)에서 MEDIUMTEXT로 확장하여
+여러 개의 떨어진 포트를 지정한 긴 목록도 보존한다.
+애플리케이션은 실제 검사한 포트를 `22,80-82,443`처럼 정리하며,
+사용자 입력 원문은 `scans.config_snapshot`의 `ports`에 보존한다.
+
 ## 8. 검증 SQL
 
 ```sql
 SHOW TABLES;
 
 SHOW COLUMNS FROM scans;
+SHOW COLUMNS FROM scan_scopes;
+SHOW COLUMNS FROM hosts;
+SHOW COLUMNS FROM scan_assets;
+SHOW COLUMNS FROM asset_change_history;
 SHOW COLUMNS FROM vulns;
 SHOW COLUMNS FROM vuln_evidence;
 SHOW COLUMNS FROM remediation_history;
@@ -239,3 +293,5 @@ HAVING COUNT(*) > 1;
 - 자동 분석이 검증 완료 상태를 임의로 되돌리지 않게 한다.
 - 중복 방지는 애플리케이션과 UNIQUE 제약조건 양쪽에서
   수행한다.
+- 스캔 전에 승인 범위와 유효기간 및 실행 한도를 검증한다.
+- 자산 메타데이터 변경에는 변경자와 사유를 반드시 남긴다.

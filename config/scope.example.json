@@ -1,0 +1,16 @@
+{
+  "scope_uid": "local-lab-v1",
+  "name": "Local loopback lab",
+  "authorization_ref": "SELF-OWNED-LAB",
+  "approved_by": "project-owner",
+  "valid_from": "2020-01-01T00:00:00+09:00",
+  "valid_until": "2099-12-31T23:59:59+09:00",
+  "allowed_targets": [
+    "127.0.0.1",
+    "::1",
+    "localhost"
+  ],
+  "max_targets": 16,
+  "max_workers": 100,
+  "max_ports_per_target": 1024
+}

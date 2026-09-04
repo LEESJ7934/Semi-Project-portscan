@@ -4,12 +4,46 @@ CREATE DATABASE IF NOT EXISTS port_scan
 
 USE port_scan;
 
+CREATE TABLE IF NOT EXISTS scan_scopes (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    scope_uid VARCHAR(64) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    authorization_ref VARCHAR(255) NOT NULL,
+    approved_by VARCHAR(255) NOT NULL,
+    valid_from DATETIME NOT NULL,
+    valid_until DATETIME NOT NULL,
+    allowed_targets JSON NOT NULL,
+    max_targets INT UNSIGNED NOT NULL,
+    max_workers INT UNSIGNED NOT NULL,
+    max_ports_per_target INT UNSIGNED NOT NULL,
+    policy_sha256 CHAR(64) NOT NULL,
+    created_at DATETIME NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL
+        DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_scan_scopes_uid (scope_uid),
+    INDEX idx_scan_scopes_valid_until (valid_until),
+    CONSTRAINT chk_scan_scopes_validity
+        CHECK (valid_until > valid_from),
+    CONSTRAINT chk_scan_scopes_max_targets
+        CHECK (max_targets BETWEEN 1 AND 4096),
+    CONSTRAINT chk_scan_scopes_max_workers
+        CHECK (max_workers BETWEEN 1 AND 512),
+    CONSTRAINT chk_scan_scopes_max_ports
+        CHECK (max_ports_per_target BETWEEN 1 AND 65535)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS scans (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     scan_uid VARCHAR(64) NOT NULL,
-    target VARCHAR(255) NOT NULL,
+    scope_id BIGINT UNSIGNED NULL,
+    target MEDIUMTEXT NOT NULL,
+    requested_targets JSON NULL,
     scan_type VARCHAR(50) NOT NULL,
-    port_range VARCHAR(100) NOT NULL,
+    port_range MEDIUMTEXT NOT NULL,
     started_at DATETIME NOT NULL,
     finished_at DATETIME NULL,
     status ENUM(
@@ -25,20 +59,82 @@ CREATE TABLE IF NOT EXISTS scans (
 
     PRIMARY KEY (id),
     UNIQUE KEY uq_scans_uid (scan_uid),
+    INDEX idx_scans_scope (scope_id),
     INDEX idx_scans_status (status),
-    INDEX idx_scans_started_at (started_at)
+    INDEX idx_scans_started_at (started_at),
+
+    CONSTRAINT fk_scans_scope
+        FOREIGN KEY (scope_id)
+        REFERENCES scan_scopes(id)
+        ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS hosts (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    asset_uid CHAR(36) NOT NULL,
     host_ip VARCHAR(45) NOT NULL,
     host_name VARCHAR(255) NULL,
+    asset_name VARCHAR(255) NULL,
+    asset_type ENUM(
+        'SERVER',
+        'WORKSTATION',
+        'NETWORK_DEVICE',
+        'CLOUD_RESOURCE',
+        'CONTAINER',
+        'UNKNOWN'
+    ) NOT NULL DEFAULT 'UNKNOWN',
+    environment ENUM(
+        'PRODUCTION',
+        'STAGING',
+        'DEVELOPMENT',
+        'TEST',
+        'UNKNOWN'
+    ) NOT NULL DEFAULT 'UNKNOWN',
+    criticality ENUM(
+        'LOW',
+        'MEDIUM',
+        'HIGH',
+        'CRITICAL',
+        'UNASSIGNED'
+    ) NOT NULL DEFAULT 'UNASSIGNED',
+    owner VARCHAR(255) NULL,
+    business_unit VARCHAR(255) NULL,
+    data_classification ENUM(
+        'PUBLIC',
+        'INTERNAL',
+        'CONFIDENTIAL',
+        'RESTRICTED',
+        'UNKNOWN'
+    ) NOT NULL DEFAULT 'UNKNOWN',
+    handles_personal_data BOOLEAN NOT NULL
+        DEFAULT FALSE,
+    internet_exposed BOOLEAN NOT NULL
+        DEFAULT FALSE,
+    lifecycle_status ENUM(
+        'ACTIVE',
+        'INACTIVE',
+        'RETIRED'
+    ) NOT NULL DEFAULT 'ACTIVE',
+    source ENUM(
+        'DISCOVERED',
+        'MANUAL',
+        'IMPORTED'
+    ) NOT NULL DEFAULT 'DISCOVERED',
+    notes TEXT NULL,
     first_seen DATETIME NOT NULL,
     last_seen DATETIME NOT NULL,
     last_scan_id BIGINT UNSIGNED NULL,
+    created_at DATETIME NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL
+        DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
+    UNIQUE KEY uq_hosts_asset_uid (asset_uid),
     UNIQUE KEY uq_hosts_ip (host_ip),
+    INDEX idx_hosts_lifecycle (lifecycle_status),
+    INDEX idx_hosts_criticality (criticality),
     INDEX idx_hosts_last_seen (last_seen),
     INDEX idx_hosts_last_scan (last_scan_id),
 
@@ -59,7 +155,8 @@ CREATE TABLE IF NOT EXISTS ports (
     state ENUM(
         'open',
         'closed',
-        'filtered'
+        'filtered',
+        'open_or_filtered'
     ) NOT NULL DEFAULT 'closed',
     first_seen DATETIME NOT NULL,
     last_seen DATETIME NOT NULL,
@@ -85,6 +182,69 @@ CREATE TABLE IF NOT EXISTS ports (
         FOREIGN KEY (last_scan_id)
         REFERENCES scans(id)
         ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS scan_assets (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    scan_id BIGINT UNSIGNED NOT NULL,
+    host_id BIGINT UNSIGNED NOT NULL,
+    input_target VARCHAR(255) NOT NULL,
+    resolution_type ENUM(
+        'IP',
+        'CIDR',
+        'HOSTNAME'
+    ) NOT NULL,
+    result_status ENUM(
+        'SCANNED',
+        'ERROR'
+    ) NOT NULL,
+    open_port_count INT UNSIGNED NOT NULL
+        DEFAULT 0,
+    error_code VARCHAR(100) NULL,
+    observed_at DATETIME NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_scan_assets_scan_host (
+        scan_id,
+        host_id
+    ),
+    INDEX idx_scan_assets_host (host_id),
+    INDEX idx_scan_assets_result (result_status),
+
+    CONSTRAINT fk_scan_assets_scan
+        FOREIGN KEY (scan_id)
+        REFERENCES scans(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_scan_assets_host
+        FOREIGN KEY (host_id)
+        REFERENCES hosts(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT chk_scan_assets_open_ports
+        CHECK (open_port_count >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS asset_change_history (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    host_id BIGINT UNSIGNED NOT NULL,
+    field_name VARCHAR(64) NOT NULL,
+    old_value TEXT NULL,
+    new_value TEXT NULL,
+    reason VARCHAR(500) NOT NULL,
+    changed_by VARCHAR(100) NOT NULL,
+    changed_at DATETIME NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    INDEX idx_asset_history_host (host_id),
+    INDEX idx_asset_history_changed_at (changed_at),
+
+    CONSTRAINT fk_asset_history_host
+        FOREIGN KEY (host_id)
+        REFERENCES hosts(id)
+        ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS vulns (
