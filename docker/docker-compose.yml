@@ -4,19 +4,35 @@ services:
     container_name: portscan-mysql
     restart: unless-stopped
 
-    # 프로젝트 루트의 .env 사용
     env_file:
       - ../.env
 
-    # 외부 인터넷에서는 접근할 수 없도록 로컬에만 연결
     ports:
       - "127.0.0.1:3307:3306"
 
     volumes:
       - mysql-data:/var/lib/mysql
-      - ../db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ../sql/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
 
-    command: --default-authentication-plugin=mysql_native_password
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - 127.0.0.1
+        - --silent
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+    stop_grace_period: 30s
 
 volumes:
   mysql-data:
