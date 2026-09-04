@@ -1,7 +1,17 @@
 from db.db_client import get_connection
 
 def clear_tables():
-    tables = ["vulns", "ports", "hosts", "scans"]
+    tables = [
+        "asset_change_history",
+        "scan_assets",
+        "remediation_history",
+        "vuln_evidence",
+        "vulns",
+        "ports",
+        "hosts",
+        "scans",
+        "scan_scopes",
+    ]
 
     with get_connection() as conn:
         with conn.cursor() as cur:

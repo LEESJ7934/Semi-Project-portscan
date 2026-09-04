@@ -1,9 +1,11 @@
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 from mysql.connector import MySQLConnection
 
+from asset_management import normalize_ip_address
 from .db_client import get_connection
 from .statuses import (
     ScanStatus,
@@ -45,16 +47,19 @@ def upsert_host(
     last_scan_id: Optional[int] = None,
 ) -> int:
     now = utc_now()
+    canonical_ip = normalize_ip_address(host_ip)
+    new_asset_uid = str(uuid4())
 
     sql = """
     INSERT INTO hosts (
+        asset_uid,
         host_ip,
         host_name,
         first_seen,
         last_seen,
         last_scan_id
     )
-    VALUES (%s, %s, %s, %s, %s)
+    VALUES (%s, %s, %s, %s, %s, %s)
     ON DUPLICATE KEY UPDATE
         id = LAST_INSERT_ID(id),
         host_name = COALESCE(
@@ -62,14 +67,18 @@ def upsert_host(
             host_name
         ),
         last_seen = VALUES(last_seen),
-        last_scan_id = VALUES(last_scan_id);
+        last_scan_id = COALESCE(
+            VALUES(last_scan_id),
+            last_scan_id
+        );
     """
 
     with conn.cursor() as cursor:
         cursor.execute(
             sql,
             (
-                host_ip,
+                new_asset_uid,
+                canonical_ip,
                 host_name,
                 now,
                 now,
@@ -129,6 +138,9 @@ def upsert_port(
         .lower()
     )
 
+    if normalized_state == "open|filtered":
+        normalized_state = "open_or_filtered"
+
     if normalized_protocol not in {
         "tcp",
         "udp",
@@ -142,6 +154,7 @@ def upsert_port(
         "open",
         "closed",
         "filtered",
+        "open_or_filtered",
     }:
         raise ValueError(
             "지원하지 않는 포트 상태입니다: "
@@ -214,6 +227,8 @@ def insert_scan(
     started_at: datetime,
     finished_at: Optional[datetime],
     status: str | ScanStatus,
+    scope_id: Optional[int] = None,
+    requested_targets: Optional[List[str]] = None,
     config_snapshot: Optional[
         Dict[str, Any]
     ] = None,
@@ -231,11 +246,21 @@ def insert_scan(
         if config_snapshot
         else None
     )
+    requested_targets_json = (
+        json.dumps(
+            requested_targets,
+            ensure_ascii=False,
+        )
+        if requested_targets is not None
+        else None
+    )
 
     sql = """
     INSERT INTO scans (
         scan_uid,
+        scope_id,
         target,
+        requested_targets,
         scan_type,
         port_range,
         started_at,
@@ -245,10 +270,15 @@ def insert_scan(
     )
     VALUES (
         %s, %s, %s, %s,
-        %s, %s, %s, %s
+        %s, %s, %s, %s,
+        %s, %s
     )
     ON DUPLICATE KEY UPDATE
         id = LAST_INSERT_ID(id),
+        scope_id = VALUES(scope_id),
+        requested_targets = VALUES(
+            requested_targets
+        ),
         finished_at = VALUES(finished_at),
         status = VALUES(status),
         config_snapshot = VALUES(
@@ -261,7 +291,9 @@ def insert_scan(
             sql,
             (
                 scan_uid,
+                scope_id,
                 target,
+                requested_targets_json,
                 scan_type,
                 port_range,
                 started_at,
@@ -451,7 +483,7 @@ def insert_vuln_evidence(
         )
 
     sql = """
-    INSERT INTO Vuln_evidence (
+    INSERT INTO vuln_evidence (
         vuln_id,
         checker,
         evidence_type,
