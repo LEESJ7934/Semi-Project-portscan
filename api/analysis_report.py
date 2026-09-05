@@ -28,7 +28,8 @@ def get_vulns(ip: str):
         v.epss,
         v.cvss,
         v.risk,
-        v.source
+        v.source,
+        v.status
     FROM vulns v
     JOIN ports p ON v.port_id = p.id
     JOIN hosts h ON p.host_id = h.id
@@ -50,12 +51,17 @@ def get_vulns(ip: str):
             "cve_id": _row(r, "cve_id", 3),
             "title": _row(r, "title", 4),
             "severity": _row(r, "severity", 5),
-            "epss": float(_row(r, "epss", 6) or 0.0),
-            "cvss": float(_row(r, "cvss", 7) or 0.0),
-            "risk": float(_row(r, "risk", 8) or 0.0),
+            "epss": float(_row(r, "epss", 6)) if _row(r, "epss", 6) is not None else None,
+            "cvss": float(_row(r, "cvss", 7)) if _row(r, "cvss", 7) is not None else None,
+            "risk": float(_row(r, "risk", 8)) if _row(r, "risk", 8) is not None else None,
             "source": _row(r, "source", 9),
+            "status": _row(r, "status", 10),
         })
     return results
+
+
+def format_score(value, digits):
+    return "N/A" if value is None else f"{value:.{digits}f}"
 
 
 def draw_text(c, text, x, y, width=95, lh=14, font=DEFAULT_FONT):
@@ -92,15 +98,16 @@ def generate_analysis_pdf(ip: str, output="reports/analysis_report.pdf"):
     y -= 25
 
     if vulns:
-        lines = ["Port | Proto | CVE | Severity | EPSS | CVSS | Risk | Title | Source"]
+        lines = ["Port/Proto | CVE | Status | Severity | EPSS | CVSS | Risk | Title | Source"]
         for v in vulns:
             lines.append(
                 f"{v['port']}/{v['protocol']} | "
                 f"{v['cve_id']} | "
+                f"{v['status']} | "
                 f"{v['severity']} | "
-                f"{v['epss']:.4f} | "
-                f"{v['cvss']:.1f} | "
-                f"{v['risk']:.4f} | "
+                f"{format_score(v['epss'], 4)} | "
+                f"{format_score(v['cvss'], 1)} | "
+                f"{format_score(v['risk'], 4)} | "
                 f"{v['title']} | "
                 f"{v['source']}"
             )
@@ -108,7 +115,7 @@ def generate_analysis_pdf(ip: str, output="reports/analysis_report.pdf"):
         y = draw_text(c, "\n".join(lines), 60, y)
 
     else:
-        y = draw_text(c, "No vulnerabilities found.", 60, y)
+        y = draw_text(c, "No stored candidates for this selection; this does not establish security.", 60, y)
 
     c.save()
     print(f"[+] Analysis PDF saved to {output}")

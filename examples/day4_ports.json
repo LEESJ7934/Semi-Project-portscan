@@ -1,0 +1,8 @@
+[
+  {"port_id": 1, "host_ip": "127.0.0.1", "port": 8081, "protocol": "tcp", "state": "open", "service": "http", "banner": "HTTP/1.0 200 OK\r\nServer: Apache/2.4.50\r\n\r\n"},
+  {"port_id": 2, "host_ip": "127.0.0.1", "port": 22, "protocol": "tcp", "state": "open", "service": "ssh", "banner": "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10\r\n"},
+  {"port_id": 3, "host_ip": "127.0.0.1", "port": 2222, "protocol": "tcp", "state": "open", "service": "unknown", "banner": "SSH-2.0-OpenSSH_9.1p1\r\n"},
+  {"port_id": 4, "host_ip": "127.0.0.1", "port": 8082, "protocol": "tcp", "state": "open", "service": "http", "banner": "HTTP/1.1 200 OK\r\nServer: nginx/1.20.0\r\n\r\n"},
+  {"port_id": 5, "host_ip": "127.0.0.1", "port": 8083, "protocol": "tcp", "state": "open", "service": "http", "banner": "HTTP/1.1 200 OK\r\nServer: Apache/2.4.51\r\n\r\n"},
+  {"port_id": 6, "host_ip": "127.0.0.1", "port": 8084, "protocol": "tcp", "state": "open", "service": "http", "banner": "HTTP/1.1 200 OK\r\nServer: hidden\r\n\r\nDVWA SQL injection demo"}
+]

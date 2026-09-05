@@ -1,61 +1,75 @@
-# analysis/run_analysis.py
-from db.query_helpers import get_all_ports
-from analysis.vuln_mapper import map_vulns
-from api.shodan_epss_report import fetch_epss_scores
-from analysis.nvd_cvss import fetch_cvss_score
-from analysis.save_vulns import save_vulns
+"""Preview or save CVE candidates without scanning or contacting external APIs."""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from uuid import UUID
+
+from analysis.vuln_mapper import DEFAULT_RULES, analyze_ports
 
 
-def calculate_risk(cvss: float, epss: float) -> float:
-    """Risk = 0.7 * (CVSS/10) + 0.3 * EPSS"""
-    cvss_norm = cvss / 10.0
-    return round(0.7 * cvss_norm + 0.3 * epss, 4)
+def positive_id(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("ID must be positive.")
+    return number
 
 
-def sanitize(c):
-    """DB 저장 전 누락된 필드를 기본값으로 채운다."""
-    c.setdefault("cve_id", "NONE")
-    c.setdefault("title", "Unknown Vulnerability")
-    c.setdefault("severity", "LOW")
-    c.setdefault("status", "POTENTIAL")
-    c.setdefault("source", c.get("id", "auto_rule"))
-    return c
+def build_parser():
+    parser = argparse.ArgumentParser(description=__doc__)
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--scan-id", type=positive_id, help="DB scan ID; only still-current port observations")
+    selection.add_argument("--asset-id", type=UUID, help="asset UUID; latest stored observation")
+    selection.add_argument("--all", action="store_true", help="all assets' latest stored open TCP observations")
+    selection.add_argument("--input", type=Path, help="offline JSON port records; preview only")
+    parser.add_argument("--rules", type=Path, default=DEFAULT_RULES)
+    parser.add_argument("--save", action="store_true", help="save DB candidates and evidence (default: preview)")
+    parser.add_argument("--output", type=Path, help="also write the JSON report to this file")
+    return parser
+
+
+def main(argv=None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.input and args.save:
+        parser.error("--input is preview-only; use --scan-id or --asset-id to save database observations.")
+    try:
+        if args.input:
+            if args.input.stat().st_size > 10 * 1024 * 1024:
+                raise ValueError("Input exceeds 10 MiB.")
+            records = json.loads(args.input.read_text(encoding="utf-8-sig"))
+            if not isinstance(records, list):
+                raise ValueError("Input must be a JSON list of port observations.")
+        else:
+            from db.query_helpers import get_all_ports
+            records = get_all_ports(scan_id=args.scan_id,
+                                    asset_uid=str(args.asset_id) if args.asset_id else None)
+        report = analyze_ports(records, args.rules)
+        report["mode"] = "SAVE" if args.save else "PREVIEW"
+        report["selected_port_count"] = len(records)
+        report["candidate_count"] = len(report["candidates"])
+        if not records:
+            report["selection_note"] = ("No current open TCP observations selected. Verify the scan ID "
+                                        "and rerun an approved scan with -sV; historical port replay is not supported.")
+        if args.save:
+            from analysis.save_vulns import save_vulns
+            report["saved_vuln_ids"] = save_vulns(report["candidates"])
+        encoded = json.dumps(report, ensure_ascii=False, indent=2)
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(encoded + "\n", encoding="utf-8")
+        print(encoded)
+        return 0
+    except (ValueError, OSError, RuntimeError) as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 1
 
 
 def run_analysis():
-    # 1. DB에서 포트 기록 조회
-    ports = get_all_ports()
-
-    # 2. 포트 → 취약점 매핑
-    candidates = map_vulns(ports)
-
-    # 3. EPSS, CVSS, Risk 계산
-    for c in candidates:
-        sanitize(c)
-
-        cve = c["cve_id"]
-
-        # EPSS
-        if cve != "NONE":
-            epss_obj = fetch_epss_scores([cve])
-            epss = epss_obj.get(cve, {}).get("epss", 0.0)
-        else:
-            epss = 0.0
-
-        # CVSS (NVD)
-        cvss = fetch_cvss_score(cve)
-
-        # Risk Score
-        risk = calculate_risk(cvss, epss)
-
-        # 결과 저장
-        c["epss"] = epss
-        c["cvss"] = cvss
-        c["risk"] = risk
-
-    # 4. DB 저장
-    save_vulns(candidates)
+    return main()
 
 
 if __name__ == "__main__":
-    run_analysis()
+    raise SystemExit(main())
