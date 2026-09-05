@@ -142,6 +142,8 @@ def save_scan_results(
                     ),
                     last_scan_id=scan_db_id,
                     state=result["state"],
+                    product=result.get("product"),
+                    fingerprint=result.get("fingerprint"),
                 )
 
             record_scan_asset(

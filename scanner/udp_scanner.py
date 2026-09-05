@@ -29,7 +29,7 @@ def scan_single_udp_port(host: str, port: int, timeout: float = 1.0) -> UDPPortS
     - 응답 없음       → open|filtered
     """
     state = udp_connect(host, port, timeout)
-    service = guess_service(port)
+    service = guess_service(port, "udp")
 
     return UDPPortScanResult(
         port=port,

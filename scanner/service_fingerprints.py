@@ -23,7 +23,10 @@ PORT_SERVICE_MAP: dict[int, tuple[str, str]] = {
     2179: ("tcp", "vmrdp"),
     3306: ("tcp", "mysql"),
     9010: ("tcp", "sdr"),
-    9200: ("tcp", "wap-wsp"),
+    8000: ("tcp", "http"),
+    8080: ("tcp", "http"),
+    8081: ("tcp", "http"),
+    8443: ("tcp", "https"),
 
     # -------- BOTH --------
     53: ("both", "dns"),
@@ -50,11 +53,9 @@ PORT_SERVICE_MAP: dict[int, tuple[str, str]] = {
 
 
 
-def guess_service(port: int) -> str | None:
-    """포트 번호로 기본 서비스 이름 추정."""
+def guess_service(port: int, protocol: str = "tcp") -> str:
+    """Return a protocol-aware port hint; it is not an observed product."""
     entry = PORT_SERVICE_MAP.get(port)
-    if entry is None:
+    if entry is None or entry[0] not in (protocol, "both"):
         return "unknown"
-    return entry[1]   # 서비스 이름
-
-
+    return entry[1]
