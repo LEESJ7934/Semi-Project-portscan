@@ -150,8 +150,10 @@ CREATE TABLE IF NOT EXISTS ports (
     port INT UNSIGNED NOT NULL,
     protocol ENUM('tcp', 'udp') NOT NULL,
     service VARCHAR(100) NULL,
+    product VARCHAR(100) NULL,
     version VARCHAR(255) NULL,
     banner TEXT NULL,
+    fingerprint JSON NULL,
     state ENUM(
         'open',
         'closed',

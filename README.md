@@ -16,6 +16,8 @@
 - 개인정보 처리 및 인터넷 노출 여부 관리
 - 스캔별 자산 관찰 결과와 자산 변경 감사이력 저장
 - 취약점 상태, 검증 증적, 조치이력 관리
+- TCP 배너의 제품·버전 식별, 공식 공지 4개 CVE의 검토된 규칙집
+- 분석 미리보기와 CANDIDATE 저장, 선정 이유·출처·규칙 해시 보존
 
 ## 1. 실행 환경 준비
 
@@ -49,20 +51,19 @@ docker compose -f .\docker\docker-compose.yml ps
 docker inspect -f "{{.State.Health.Status}}" portscan-mysql
 ```
 
-새 볼륨에서는 `sql/init.sql`이 자동 실행됩니다. 기존 V2 DB는
-초기화하지 말고 다음 마이그레이션을 한 번만 실행합니다.
+새 볼륨에서는 V4가 반영된 `sql/init.sql`이 자동 실행됩니다.
+기존 DB는 외부 덤프를 백업하고 현재 버전에서 순서대로 마이그레이션합니다.
 
-```powershell
-Get-Content -Raw .\sql\migration_v3.sql | docker exec -i portscan-mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root --default-character-set=utf8mb4 -D port_scan'
-Get-Content -Raw -Encoding UTF8 .\sql\migration_v3_1.sql | docker exec -i portscan-mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root --default-character-set=utf8mb4 -D port_scan'
-```
+| 현재 DB | 실행할 파일 |
+|---|---|
+| V2 | `migration_v3.sql` → `migration_v3_1.sql` → `migration_v4.sql` |
+| V3 | `migration_v3_1.sql` → `migration_v4.sql` |
+| V3.1 (3일차 완료) | `migration_v4.sql` |
+| V4 | 실행할 마이그레이션 없음 |
 
-이미 V3를 적용했다면 현재 DB를 백업한 후 `migration_v3_1.sql`만
-실행합니다. `migration_v3.sql`은 재실행하지 않습니다. V3.1은
-긴 포트 목록을 저장할 수 있도록 `scans.port_range`를 확장합니다.
-
-마이그레이션 전에 DB 덤프를 별도로 생성해야 합니다. 자세한
-절차는 `docs/asset_management.md`를 확인합니다.
+백업·오류 확인을 포함한 PowerShell 절차는
+[4일차 실행 안내](docs/day4_service_cve_mapping.md)를 따릅니다.
+기존 V2/V3 마이그레이션은 재실행하지 않습니다.
 
 ## 3. 승인 스코프 준비
 
@@ -158,7 +159,7 @@ py -m scripts.manage_assets history --asset-id <ASSET_ID>
 
 ```powershell
 py -m unittest discover -s .\tests -p "test_*.py" -v
-py -m compileall -q .\asset_management .\scanner .\db .\scripts
+py -m compileall -q .\asset_management .\scanner .\db .\scripts .\analysis .\verification .\api
 py .\scripts\check_secrets.py
 docker compose -f .\docker\docker-compose.yml config --quiet
 git diff --check
@@ -167,8 +168,25 @@ git diff --check
 외부 서비스나 브라우저에 의존하는 수동 실습 파일은 자동 단위
 테스트와 구분합니다.
 
+## 7. CVE 후보 분석 (4일차)
+
+DB 없이 제공된 예시를 분석합니다. 파일 내 ID는 실습용이며 저장할 수 없습니다.
+
+```powershell
+py -m analysis.run_analysis --input .\examples\day4_ports.json
+```
+
+실제 DB 관찰값은 `--scan-id <스캔 ID>` 또는 `--asset-id <자산 UUID>`로
+선택합니다. 기본은 미리보기이며 `--save`를 추가하면 후보와 근거가 저장됩니다.
+전체 절차와 루프백 실습은 [4일차 실행 안내](docs/day4_service_cve_mapping.md)에 있습니다.
+
+규칙집은 공식 공지를 검토한 4개 CVE만 포함합니다. **미일치는 안전 판정이 아닙니다.**
+실제 설치 패키지·설정·패치 여부 검증은 5일차 범위입니다.
+
 ## 문서
 
-- `docs/database_schema.md`: DB V3 구조와 관계
+- `docs/database_schema.md`: DB V4 구조와 관계
 - `docs/asset_management.md`: 자산관리·스코프·마이그레이션
   상세 절차
+
+- `docs/day4_service_cve_mapping.md`: 서비스 식별·CVE 규칙·V4 적용·로컬 실습

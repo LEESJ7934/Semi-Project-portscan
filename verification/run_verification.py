@@ -1,3 +1,4 @@
+from analysis.vuln_mapper import RETIRED_RULE_IDS
 import hashlib
 from pathlib import Path
 
@@ -230,6 +231,11 @@ def run_verifications() -> None:
             port_record,
             vuln_candidate,
         ) in targets:
+            source = vuln_candidate.get("source", "")
+            if source in RETIRED_RULE_IDS or source.startswith("day4:"):
+                print(f"[REVIEW] vuln_id={vuln_candidate['id']}: "
+                      "requires a CVE-specific verifier; status preserved.")
+                continue
             service = str(
                 port_record.get(
                     "service"

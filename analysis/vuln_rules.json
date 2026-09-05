@@ -1,42 +1,55 @@
-[
-  {
-    "id": "rule_ftp_vsftpd_3_0_5",
-    "service": "ftp",
-    "version_regex": "^3\\.0\\.5$",
-    "cve": "CVE-1999-0497",
-    "severity": "LOW",
-    "title": "Anonymous FTP login"
-  },
-  {
-    "id": "rule_ssh_openssh_8_9",
-    "service": "ssh",
-    "version_regex": "^8\\.9",
-    "cve": "CVE-2023-25136",
-    "severity": "MEDIUM",
-    "title": "OpenSSH 8.x Vulnerability"
-  },
-  {
-    "id": "rule_telnet_default",
-    "service": "telnet",
-    "version_regex": ".*",
-    "cve": "CVE-1999-0613",
-    "severity": "HIGH",
-    "title": "Telnet Service Exposure"
-  },
-  {
-    "id": "rule_dvwa_sqli",
-    "service": "http",
-    "version_regex": ".*",
-    "cve": "CVE-2012-1823",
-    "severity": "HIGH",
-    "title": "DVWA SQL Injection (mapped to PHP CGI RCE CVE-2012-1823)"
-  },
-  {
-    "id": "rule_dvwa_fileupload",
-    "service": "http",
-    "version_regex": ".*",
-    "cve": "CVE-2020-2551",
-    "severity": "CRITICAL",
-    "title": "DVWA File Upload Vulnerability (mapped to WebLogic CVE-2020-2551)"
-  }
-]
+{
+  "schema_version": 1,
+  "reviewed_on": "2026-09-05",
+  "coverage": "Curated teaching subset; not full CVE coverage or a claim of exploitability.",
+  "rules": [
+    {
+      "id": "day4:apache:cve-2021-41773",
+      "product": "apache_http_server",
+      "services": ["http", "https"],
+      "cve": "CVE-2021-41773",
+      "title": "Apache HTTP Server path normalization issue (candidate)",
+      "severity": "CRITICAL",
+      "severity_basis": "Apache vendor advisory rating; not measured host risk",
+      "affected": {"introduced": "2.4.49", "fixed": "2.4.50"},
+      "conditions": ["Confirm installed package and vendor backports.", "Review Alias-like mappings and directory access restrictions.", "Code execution additionally depends on enabled CGI; a banner cannot establish this."],
+      "references": ["https://httpd.apache.org/security/vulnerabilities_24.html#CVE-2021-41773"]
+    },
+    {
+      "id": "day4:apache:cve-2021-42013",
+      "product": "apache_http_server",
+      "services": ["http", "https"],
+      "cve": "CVE-2021-42013",
+      "title": "Apache HTTP Server incomplete path normalization fix (candidate)",
+      "severity": "CRITICAL",
+      "severity_basis": "Apache vendor advisory rating; not measured host risk",
+      "affected": {"introduced": "2.4.49", "fixed": "2.4.51"},
+      "conditions": ["Confirm installed package and vendor backports.", "Review Alias-like mappings, directory access restrictions and CGI configuration."],
+      "references": ["https://httpd.apache.org/security/vulnerabilities_24.html#CVE-2021-42013"]
+    },
+    {
+      "id": "day4:openssh:cve-2023-25136",
+      "product": "openssh",
+      "services": ["ssh"],
+      "cve": "CVE-2023-25136",
+      "title": "OpenSSH 9.1 pre-authentication double free (candidate)",
+      "severity": "MEDIUM",
+      "severity_basis": "Local triage label only; upstream release note supplies no CVSS score",
+      "affected": {"introduced": "9.1", "fixed": "9.2"},
+      "conditions": ["Confirm actual OpenSSH server package, portable patch level and distribution backports.", "Upstream introduced the issue in 9.1 and fixed it in 9.2; 8.9 does not match.", "The release note describes pre-authentication sandbox mitigation; this match does not establish exploitability."],
+      "references": ["https://www.openssh.org/txt/release-9.2", "https://www.cve.org/CVERecord?id=CVE-2023-25136"]
+    },
+    {
+      "id": "day4:nginx:cve-2021-23017",
+      "product": "nginx",
+      "services": ["http", "https"],
+      "cve": "CVE-2021-23017",
+      "title": "nginx resolver memory overwrite (candidate)",
+      "severity": "MEDIUM",
+      "severity_basis": "nginx vendor advisory rating; not measured host risk",
+      "affected": {"introduced": "0.6.18", "fixed": "1.20.1"},
+      "conditions": ["Confirm installed package and vendor backports.", "Confirm use of the nginx resolver directive; a Server header does not reveal resolver configuration."],
+      "references": ["https://nginx.org/en/security_advisories.html"]
+    }
+  ]
+}

@@ -75,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser.add_argument(
         "-sV",
         action="store_true",
-        help="display detected service versions",
+        help="collect TCP banners and identify advertised products/versions",
     )
     scan_parser.add_argument(
         "-oN",
@@ -174,7 +174,7 @@ def render_results(
         lines.append("Target scan completed")
         lines.append(f"closed ports: {closed_count}")
         header = (
-            "PORT\tSTATE\tSERVICE\tVERSION"
+            "PORT\tSTATE\tSERVICE\tPRODUCT\tVERSION"
             if show_versions
             else "PORT\tSTATE\tSERVICE"
         )
@@ -195,15 +195,16 @@ def render_results(
             state = result["state"]
             service = (
                 result.get("service")
-                or guess_service(port)
+                or guess_service(port, protocol)
                 or "-"
             )
             version = result.get("version") or "-"
+            product = result.get("product") or "-"
 
             if show_versions:
                 lines.append(
                     f"{port}/{protocol}\t{state}\t"
-                    f"{service:<15}\t{version}"
+                    f"{service:<15}\t{product}\t{version}"
                 )
             else:
                 lines.append(
@@ -288,6 +289,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         enable_udp=enable_udp,
         udp_only=udp_only,
         scan_type=scan_type,
+        detect_versions=args.sV,
+        server_names={target.ip: target.input_target for target in resolved_targets
+                      if target.resolution_type == "HOSTNAME"},
     )
     attach_target_metadata(results, resolved_targets)
     results["requested_targets"] = list(args.target)

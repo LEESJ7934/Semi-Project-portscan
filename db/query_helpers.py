@@ -88,29 +88,32 @@ def upsert_host(
         return cursor.lastrowid
 
 
-def get_all_ports() -> List[Dict[str, Any]]:
-    conn = get_connection()
+def get_all_ports(scan_id: int | None = None, asset_uid: str | None = None) -> List[Dict[str, Any]]:
+    """Open TCP observations from each asset's latest successful stored scan.
 
-    sql = """
-    SELECT
-        p.id AS port_id,
-        h.host_ip,
-        p.port,
-        p.protocol,
-        p.service,
-        p.version,
-        p.banner,
-        p.state
-    FROM ports AS p
-    JOIN hosts AS h
-        ON p.host_id = h.id;
+    ports is a current-state table, not a historical per-scan snapshot. Requiring
+    p.last_scan_id = h.last_scan_id excludes stale ports omitted by a later scan.
     """
-
+    conn = get_connection()
+    sql = """
+    SELECT p.id AS port_id, h.asset_uid, h.host_ip, p.port, p.protocol,
+           p.service, p.product, p.version, p.banner, p.fingerprint, p.state,
+           p.last_scan_id AS scan_id
+    FROM ports AS p JOIN hosts AS h ON p.host_id = h.id
+    WHERE p.state = 'open' AND p.protocol = 'tcp'
+      AND p.last_scan_id = h.last_scan_id
+    """
+    params = []
+    if scan_id is not None:
+        sql += " AND p.last_scan_id = %s"
+        params.append(scan_id)
+    if asset_uid is not None:
+        sql += " AND h.asset_uid = %s"
+        params.append(asset_uid)
+    sql += " ORDER BY h.id, p.port"
     try:
-        with conn.cursor(
-            dictionary=True
-        ) as cursor:
-            cursor.execute(sql)
+        with conn.cursor(dictionary=True) as cursor:
+            cursor.execute(sql, tuple(params))
             return cursor.fetchall()
     finally:
         conn.close()
@@ -126,6 +129,8 @@ def upsert_port(
     banner: Optional[str] = None,
     last_scan_id: Optional[int] = None,
     state: str = "closed",
+    product: Optional[str] = None,
+    fingerprint: Optional[dict] = None,
 ) -> int:
     normalized_protocol = (
         protocol
@@ -174,26 +179,21 @@ def upsert_port(
         state,
         first_seen,
         last_seen,
-        last_scan_id
+        last_scan_id,
+        product,
+        fingerprint
     )
     VALUES (
         %s, %s, %s, %s, %s,
-        %s, %s, %s, %s, %s
+        %s, %s, %s, %s, %s, %s, %s
     )
     ON DUPLICATE KEY UPDATE
         id = LAST_INSERT_ID(id),
-        service = COALESCE(
-            VALUES(service),
-            service
-        ),
-        version = COALESCE(
-            VALUES(version),
-            version
-        ),
-        banner = COALESCE(
-            VALUES(banner),
-            banner
-        ),
+        service = VALUES(service),
+        version = VALUES(version),
+        banner = VALUES(banner),
+        product = VALUES(product),
+        fingerprint = VALUES(fingerprint),
         state = VALUES(state),
         last_seen = VALUES(last_seen),
         last_scan_id = VALUES(last_scan_id);
@@ -213,6 +213,8 @@ def upsert_port(
                 now,
                 now,
                 last_scan_id,
+                product,
+                json.dumps(fingerprint, ensure_ascii=False) if fingerprint is not None else None,
             ),
         )
         return cursor.lastrowid
@@ -365,11 +367,13 @@ def upsert_vuln(
         id = LAST_INSERT_ID(id),
         title = VALUES(title),
         severity = VALUES(severity),
-        epss = VALUES(epss),
-        cvss = VALUES(cvss),
-        risk = VALUES(risk),
+        epss = COALESCE(VALUES(epss), epss),
+        cvss = COALESCE(VALUES(cvss), cvss),
+        risk = COALESCE(VALUES(risk), risk),
         status = CASE
             WHEN vulns.status IN (
+                'POTENTIAL',
+                'ERROR',
                 'CONFIRMED',
                 'NOT_APPLICABLE',
                 'FALSE_POSITIVE',
