@@ -1,78 +1,64 @@
+"""Save candidates and their matching evidence in one transaction."""
+import hashlib
+import json
+import math
+
 from db.db_client import get_connection
-from db.query_helpers import upsert_vuln
-from db.statuses import VulnStatus
+from db.query_helpers import insert_vuln_evidence, upsert_vuln
 
 
-def as_float(
-    value,
-    default: float = 0.0,
-) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
+def as_float(value, default=None):
+    if value is None:
         return default
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("Scores must be finite or null.")
+    return number
 
 
-def save_vulns(
-    vulns: list[dict],
-) -> list[int]:
-    """
-    동일한 포트/CVE/출처는
-    중복 생성하지 않고 갱신합니다.
-    """
+def save_vulns(vulns: list[dict]) -> list[int]:
+    if not vulns:
+        return []
+    # Validate everything before opening a transaction.
+    for vuln in vulns:
+        if not isinstance(vuln.get("port_id"), int) or isinstance(vuln["port_id"], bool) or vuln["port_id"] <= 0:
+            raise ValueError("Saving requires real positive database port IDs.")
+        if vuln.get("status") != "CANDIDATE" or not vuln.get("source", "").startswith("day4:"):
+            raise ValueError("Day 4 analysis only saves CANDIDATE records from the reviewed catalog.")
+        if not vuln.get("fingerprint") or not vuln.get("catalog_sha256"):
+            raise ValueError("Missing candidate evidence.")
+        for key, maximum in (("cvss", 10), ("epss", 1), ("risk", 1)):
+            score = as_float(vuln.get(key))
+            if score is not None and not 0 <= score <= maximum:
+                raise ValueError(f"Invalid {key} score.")
     conn = get_connection()
     saved_ids = []
-
     try:
         for vuln in vulns:
             vuln_id = upsert_vuln(
-                conn=conn,
-                port_id=vuln["port_id"],
-                cve_id=vuln.get(
-                    "cve_id",
-                    "NONE",
-                ),
-                title=vuln.get(
-                    "title",
-                    "Unknown Vulnerability",
-                ),
-                severity=vuln.get(
-                    "severity",
-                    "INFO",
-                ),
-                epss=as_float(
-                    vuln.get("epss")
-                ),
-                cvss=as_float(
-                    vuln.get("cvss")
-                ),
-                risk=as_float(
-                    vuln.get("risk")
-                ),
-                status=vuln.get(
-                    "status",
-                    VulnStatus.POTENTIAL.value,
-                ),
-                source=vuln.get(
-                    "source",
-                    "auto_rule",
-                ),
+                conn=conn, port_id=vuln["port_id"], cve_id=vuln["cve_id"],
+                title=vuln["title"], severity=vuln["severity"],
+                epss=as_float(vuln.get("epss")), cvss=as_float(vuln.get("cvss")),
+                risk=as_float(vuln.get("risk")), status="CANDIDATE", source=vuln["source"],
             )
-
+            details = json.dumps(vuln, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            digest = hashlib.sha256(details.encode("utf-8")).hexdigest()
+            # upsert_vuln holds the parent row lock; concurrent re-saves serialize here.
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id FROM vuln_evidence WHERE vuln_id = %s "
+                    "AND checker = 'day4_mapper' AND sha256 = %s LIMIT 1 FOR UPDATE",
+                    (vuln_id, digest),
+                )
+                exists = cursor.fetchone()
+            if not exists:
+                insert_vuln_evidence(conn, vuln_id, "day4_mapper", "BANNER",
+                                     details=details, sha256=digest)
             saved_ids.append(vuln_id)
-
         conn.commit()
-
+        return saved_ids
     except Exception:
         conn.rollback()
         raise
-
     finally:
         conn.close()
-
-    print(
-        "[+] 취약점 저장 완료: "
-        f"{len(saved_ids)}건 처리"
-    )
-
-    return saved_ids

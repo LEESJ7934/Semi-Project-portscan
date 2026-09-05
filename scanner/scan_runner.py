@@ -23,7 +23,9 @@ def run_scan(
     max_workers: int = 100,
     enable_udp: bool = False,   # TCP + UDP
     udp_only: bool = False, 
-    scan_type: str = "tcp",     # UDP only
+    scan_type: str = "tcp",
+    detect_versions: bool = False,
+    server_names: dict[str, str] | None = None,
 ) -> Dict:
     started_at = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
     
@@ -54,11 +56,15 @@ def run_scan(
         else:
             if threaded:
                 tcp_results = threaded_scan(
-                    ip, tcp_port_list, timeout=timeout, max_workers=max_workers
+                    ip, tcp_port_list, timeout=timeout, max_workers=max_workers,
+                    detect_versions=detect_versions,
+                    server_name=(server_names or {}).get(ip)
                 )
             else:
                 tcp_results = sequential_scan(
-                    ip, tcp_port_list, timeout=timeout
+                    ip, tcp_port_list, timeout=timeout,
+                    detect_versions=detect_versions,
+                    server_name=(server_names or {}).get(ip)
                 )
 
         # =====================================================

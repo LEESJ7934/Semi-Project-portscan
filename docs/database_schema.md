@@ -295,3 +295,27 @@ HAVING COUNT(*) > 1;
   수행한다.
 - 스캔 전에 승인 범위와 유효기간 및 실행 한도를 검증한다.
 - 자산 메타데이터 변경에는 변경자와 사유를 반드시 남긴다.
+
+
+## V4 추가: 제품 식별과 CVE 후보 근거
+
+기존 V3/V3.1 데이터와 자산·스캔 관계는 유지합니다.
+
+| 테이블/컬럼 | 형식 | 의미 |
+|---|---|---|
+| `ports.product` | `VARCHAR(100) NULL` | `apache_http_server`, `openssh` 등 식별된 제품 |
+| `ports.fingerprint` | `JSON NULL` | 파서 버전, 근거, 서비스·제품·버전, 식별 출처, 프로브 오류, TLS 식별 정보 |
+| `vuln_evidence` (기존 테이블 재사용) | `checker=day4_mapper`, `evidence_type=BANNER` | 후보 선정 이유, CVE 출처, 영향 범위, 규칙 해시, 스캔 ID를 JSON details로 보존 |
+
+새 CVE 후보는 `CANDIDATE`, 미조회 `cvss/epss/risk`는 `NULL`입니다.
+같은 포트/CVE/출처의 후보는 기존 UNIQUE 키로 중복 방지합니다.
+동일 근거는 후보 행 잠금 아래 `vuln_id/checker/sha256`로 조회해 중복 삽입을 방지합니다.
+이미 검토한 상태와 ERROR 상태는 후보 재저장으로 되돌리지 않습니다.
+
+분석은 자산의 마지막 스캔에 속한 열린 TCP 관찰값만 사용합니다.
+`ports`의 모든 과거 상태를 저장하는 스냅샷 테이블은 추가하지 않았습니다.
+새 관찰에서 식별 정보가 없으면 이전 제품/버전을 비워 오래된 값을 재사용하지 않습니다.
+
+기존 DB에는 `migration_v4.sql`, 신규 DB에는 `init.sql`을 사용합니다.
+`verify_v4.sql`은 구조·후보·근거·중복·폐기한 규칙의 기존 기록을 읽기 전용으로 확인합니다.
+자세한 실행 절차: [4일차 안내](day4_service_cve_mapping.md).
