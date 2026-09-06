@@ -647,78 +647,65 @@ def update_vuln_verification(
 
 
 def get_ports_with_vuln_candidates(
-    conn: Optional[
-        MySQLConnection
-    ] = None,
-) -> List[
-    Tuple[
-        Dict[str, Any],
-        Dict[str, Any],
-    ]
-]:
-    owns_connection = conn is None
-    active_connection = (
-        conn or get_connection()
-    )
+    conn: Optional[MySQLConnection] = None,
+    vuln_id: Optional[int] = None,
+    scan_id: Optional[int] = None,
+    for_update: bool = False,
+) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """Current endpoints for CVE verification, retaining the legacy tuple API.
 
-    sql = """
-    SELECT
-        p.id AS port_id,
-        h.host_ip,
-        p.port,
-        p.protocol,
-        p.service,
-        v.id AS vuln_id,
-        v.cve_id,
-        v.title,
-        v.source,
-        v.status
-    FROM vulns AS v
-    JOIN ports AS p
-        ON v.port_id = p.id
-    JOIN hosts AS h
-        ON p.host_id = h.id
-    WHERE v.status IN (
-        'POTENTIAL',
-        'RETEST_REQUIRED'
-    );
+    scan_id selects the port's current observation scan, not historical replay.
+    FOR UPDATE is only valid on a caller-owned transaction used to persist results.
     """
-
+    if for_update and conn is None:
+        raise ValueError("Row locking requires a caller-owned connection")
+    owns_connection = conn is None
+    active_connection = conn if conn is not None else get_connection()
+    sql = """
+    SELECT p.id AS port_id, h.host_ip, p.port, p.protocol, p.service,
+           p.product, p.version, p.banner, p.fingerprint, p.state AS port_state,
+           p.last_scan_id AS scan_id, s.scan_uid, s.scope_id,
+           sa.input_target, sa.resolution_type,
+           v.id AS vuln_id, v.cve_id, v.title, v.source, v.status
+    FROM vulns AS v
+    JOIN ports AS p ON v.port_id = p.id
+    JOIN hosts AS h ON p.host_id = h.id
+    LEFT JOIN scans AS s ON s.id = p.last_scan_id
+    LEFT JOIN scan_assets AS sa ON sa.scan_id = p.last_scan_id AND sa.host_id = h.id
+    WHERE v.status IN ('CANDIDATE', 'POTENTIAL', 'RETEST_REQUIRED', 'ERROR')
+    """
+    params = []
+    if vuln_id is not None:
+        sql += " AND v.id = %s"
+        params.append(vuln_id)
+    if scan_id is not None:
+        sql += " AND p.last_scan_id = %s"
+        params.append(scan_id)
+    sql += " ORDER BY v.id"
+    if for_update:
+        sql += " FOR UPDATE"
     try:
-        with active_connection.cursor(
-            dictionary=True
-        ) as cursor:
-            cursor.execute(sql)
+        with active_connection.cursor(dictionary=True) as cursor:
+            cursor.execute(sql, tuple(params))
             rows = cursor.fetchall()
-
         results = []
-
         for row in rows:
             port_record = {
-                "id": row["port_id"],
-                "host_ip": row["host_ip"],
-                "port": row["port"],
-                "protocol": row["protocol"],
-                "service": row["service"],
+                "id": row["port_id"], "port_id": row["port_id"],
+                "host_ip": row["host_ip"], "port": row["port"], "protocol": row["protocol"],
+                "service": row["service"], "product": row["product"], "version": row["version"],
+                "banner": row["banner"], "fingerprint": row["fingerprint"], "state": row["port_state"],
+                "scan_id": row["scan_id"], "scan_uid": row["scan_uid"], "scope_id": row["scope_id"],
+                "input_target": row["input_target"] or row["host_ip"],
+                "resolution_type": row["resolution_type"] or "IP",
             }
-
             vuln_record = {
-                "id": row["vuln_id"],
-                "cve": row["cve_id"],
-                "title": row["title"],
-                "source": row["source"],
-                "status": row["status"],
+                "id": row["vuln_id"], "vuln_id": row["vuln_id"],
+                "cve": row["cve_id"], "cve_id": row["cve_id"],
+                "title": row["title"], "source": row["source"], "status": row["status"],
             }
-
-            results.append(
-                (
-                    port_record,
-                    vuln_record,
-                )
-            )
-
+            results.append((port_record, vuln_record))
         return results
-
     finally:
         if owns_connection:
             active_connection.close()

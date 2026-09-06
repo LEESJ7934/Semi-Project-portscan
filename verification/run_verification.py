@@ -1,400 +1,234 @@
-from analysis.vuln_mapper import RETIRED_RULE_IDS
+"""Authorize CVE verification and persist each result in one V4 transaction."""
+from __future__ import annotations
+
 import hashlib
-from pathlib import Path
+import ipaddress
+import json
+from datetime import datetime, timezone
 
-from colorama import Fore, Style, init
-
-from db.db_client import DBClient
-from db.query_helpers import (
-    get_ports_with_vuln_candidates,
-    insert_vuln_evidence,
-    update_vuln_verification,
-)
-from db.statuses import (
-    VulnStatus,
-    normalize_vuln_status,
-)
-from verification.checker_ftp import FTPChecker
-from verification.checker_http import HTTPChecker
-from verification.nuclei_runner import NucleiRunner
-from verification.screenshot import (
-    ScreenshotChecker,
-)
+from analysis.vuln_mapper import RETIRED_RULE_IDS
+from db.db_client import get_connection
+from db.query_helpers import (get_ports_with_vuln_candidates, insert_vuln_evidence,
+                              update_vuln_verification)
+from db.statuses import validate_vuln_transition
+from scanner.scope import ScopePolicy, ScopeValidationError
+from scanner.targets import ResolvedTarget, normalize_hostname, resolve_target_specs
+from verification.base_checker import RESULT_EVIDENCE_TYPES, RESULT_STATUSES, check_result
+from verification.cve_verifiers import get_verifier
 
 
-init(autoreset=True)
-
-CHECKER_RESULT_STATUSES = {
-    "POTENTIAL",
-    "CONFIRMED",
-    "INVALID",
-    "ERROR",
-    "SKIP",
-}
+ELIGIBLE_STATUSES = frozenset({"CANDIDATE", "POTENTIAL", "RETEST_REQUIRED", "ERROR"})
 
 
-def colorize_status(
-    status: str,
-) -> str:
-    status = status.upper()
-
-    colors = {
-        VulnStatus.CONFIRMED.value:
-            Fore.GREEN,
-        VulnStatus.POTENTIAL.value:
-            Fore.YELLOW,
-        VulnStatus.FALSE_POSITIVE.value:
-            Fore.RED,
-        VulnStatus.NOT_APPLICABLE.value:
-            Fore.LIGHTBLACK_EX,
-        VulnStatus.RETEST_REQUIRED.value:
-            Fore.CYAN,
-        VulnStatus.CLOSED.value:
-            Fore.BLUE,
-        VulnStatus.ERROR.value:
-            Fore.MAGENTA,
-    }
-
-    color = colors.get(status, "")
-
-    return (
-        color
-        + status
-        + Style.RESET_ALL
-    )
+class VerificationConflictError(RuntimeError):
+    """The target or review state changed while a probe was in progress."""
 
 
-def get_checkers_for_candidate(
-    service: str,
-    vuln_candidate: dict,
-) -> list:
-    cve_id = (
-        vuln_candidate.get("cve")
-        or vuln_candidate.get("cve_id")
-        or ""
-    ).upper()
-
-    if service == "ftp":
-        return [FTPChecker()]
-
-    if service in {
-        "http",
-        "https",
-    }:
-        checkers = [
-            HTTPChecker(),
-            ScreenshotChecker(),
-        ]
-
-        if cve_id in {
-            "CVE-2012-1823",
-            "CVE-2020-2551",
-        }:
-            checkers.append(
-                NucleiRunner()
-            )
-
-        return checkers
-
-    return []
+class VerificationDatabaseError(RuntimeError):
+    """Evidence/status/history could not be committed together."""
 
 
-def summarize_results(
-    results: list[dict],
-) -> str:
-    statuses = {
-        str(
-            result.get(
-                "status",
-                "ERROR",
-            )
-        ).strip().upper()
-        for result in results
-    }
-
-    if "CONFIRMED" in statuses:
-        return VulnStatus.CONFIRMED.value
-
-    if "POTENTIAL" in statuses:
-        return VulnStatus.POTENTIAL.value
-
-    if "ERROR" in statuses:
-        return VulnStatus.ERROR.value
-
-    if "INVALID" in statuses:
-        return (
-            VulnStatus.FALSE_POSITIVE.value
-        )
-
-    return (
-        VulnStatus.NOT_APPLICABLE.value
-    )
+def _resolved_target(port_record: dict) -> ResolvedTarget:
+    ip = str(ipaddress.ip_address(port_record["host_ip"]))
+    if port_record.get("resolution_type") == "HOSTNAME":
+        return ResolvedTarget(ip, normalize_hostname(port_record["input_target"]), "HOSTNAME")
+    return ResolvedTarget(ip, ip, "IP")
 
 
-def evidence_type_for(
-    checker_name: str,
-    status: str,
-) -> str:
-    if status == "ERROR":
-        return "ERROR_LOG"
-
-    if checker_name == "ScreenshotChecker":
-        return "SCREENSHOT"
-
-    if checker_name == "NucleiRunner":
-        return "NUCLEI"
-
-    if checker_name == "HTTPChecker":
-        return "HTTP_RESPONSE"
-
-    if checker_name == "FTPChecker":
-        return "BANNER"
-
-    return "MANUAL"
+def authorize_selection(targets: list[tuple[dict, dict]], policy: ScopePolicy) -> None:
+    """Validate the entire selection before even the first verification probe."""
+    policy.validate_time()
+    if not targets:
+        return
+    endpoints = {}
+    resolved = []
+    for port_record, _ in targets:
+        target = _resolved_target(port_record)
+        port = port_record["port"]
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            raise ScopeValidationError("Invalid verification port")
+        endpoints.setdefault(target.ip, set()).add((port_record["protocol"], port))
+        if target not in resolved:
+            resolved.append(target)
+    policy.authorize(resolved, worker_count=1, port_count=max(map(len, endpoints.values())))
 
 
-def file_sha256(
-    file_path: str | None,
-) -> str | None:
-    if not file_path:
-        return None
-
-    path = Path(file_path)
-
-    if not path.is_file():
-        return None
-
-    digest = hashlib.sha256()
-
-    with path.open("rb") as file:
-        for chunk in iter(
-            lambda: file.read(65536),
-            b"",
-        ):
-            digest.update(chunk)
-
-    return digest.hexdigest()
+def _check_current_hostname(target: ResolvedTarget, policy: ScopePolicy) -> None:
+    """Only real execution resolves approved hostnames; dry-run does no DNS."""
+    if target.resolution_type != "HOSTNAME":
+        return
+    current = resolve_target_specs([target.input_target], max_targets=policy.max_targets)
+    policy.authorize(current, worker_count=1, port_count=1)
+    if target.ip not in {entry.ip for entry in current}:
+        raise ScopeValidationError("The approved hostname no longer resolves to the stored target IP")
 
 
-def run_checker(
-    checker,
-    port_record: dict,
-    vuln_candidate: dict,
-) -> dict:
+def run_checker(checker, port_record: dict, vuln_candidate: dict) -> dict:
+    """Validate a checker result instead of mapping ambiguous legacy values to safe."""
     try:
-        result = checker.run_check(
-            port_record,
-            vuln_candidate,
-        )
-
-    except Exception as error:
-        result = {
-            "status": "ERROR",
-            "details": (
-                f"{type(error).__name__}: "
-                f"{error}"
-            ),
-        }
-
-    raw_status = str(
-        result.get(
-            "status",
-            "ERROR",
-        )
-    ).strip().upper()
-
-    if (
-        raw_status
-        not in CHECKER_RESULT_STATUSES
-    ):
-        raw_status = "ERROR"
-        result["details"] = (
-            "검증기가 지원하지 않는 "
-            "상태값을 반환했습니다."
-        )
-
-    result["status"] = raw_status
-    return result
+        result = checker.run_check(port_record, vuln_candidate)
+        if not isinstance(result, dict) or result.get("status") not in RESULT_STATUSES:
+            raise ValueError("Invalid verifier status")
+        if (not isinstance(result.get("reason"), str) or not result["reason"]
+                or result.get("evidence_type") not in RESULT_EVIDENCE_TYPES
+                or not isinstance(result.get("details"), dict)
+                or not isinstance(result.get("additional_checks", []), list)):
+            raise ValueError("Invalid verifier result contract")
+        if result["status"] == "CONFIRMED":
+            proof = result.get("positive_evidence")
+            if (not isinstance(proof, dict) or not proof.get("summary")
+                    or proof.get("kind") in {None, "banner", "version", "http_status"}):
+                raise ValueError("CONFIRMED requires positive CVE-specific evidence")
+        json.dumps(result, allow_nan=False)
+        return {**result, "checker": type(checker).__name__}
+    except TimeoutError:
+        code = "TIMEOUT"
+    except OSError:
+        code = "CONNECTION_ERROR"
+    except Exception:
+        code = "VERIFIER_ERROR"
+    return check_result("ERROR", "Verification failed; no non-vulnerable conclusion is available.",
+                        checker=type(checker).__name__, evidence_type="ERROR_LOG", error_code=code,
+                        details={"safe_checks": [], "failure_stage": "verifier_execution"})
 
 
-def run_verifications() -> None:
-    db = DBClient()
+def resulting_status(current: str, result_status: str) -> str:
+    if current not in ELIGIBLE_STATUSES:
+        raise VerificationConflictError("The vulnerability is already in a reviewed state")
+    new_status = result_status
+    if current == "RETEST_REQUIRED" and result_status == "POTENTIAL":
+        new_status = "RETEST_REQUIRED"
+    elif current in {"CANDIDATE", "ERROR"} and result_status == "CONFIRMED":
+        # First establish POTENTIAL. Confirmation is a separate subsequent stage.
+        new_status = "POTENTIAL"
+    validate_vuln_transition(current, new_status)
+    return new_status
 
+
+def _target_identity(port: dict, vuln: dict) -> tuple:
+    return (port["id"], port["host_ip"], port["port"], port["protocol"], port.get("scan_id"),
+            port.get("service"), port.get("product"), port.get("version"), port.get("banner"),
+            port.get("input_target"), port.get("resolution_type"),
+            vuln["id"], vuln.get("cve_id") or vuln.get("cve"), vuln.get("source"))
+
+
+def _json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def save_verification(port_record: dict, vuln_candidate: dict, result: dict,
+                      policy: ScopePolicy, checked_at: str) -> dict:
+    """Lock the parent first, then deduplicate evidence and change status/history."""
+    vuln_id = vuln_candidate["id"]
+    content = {
+        "checker": result["checker"], "cve_id": vuln_candidate.get("cve_id") or vuln_candidate.get("cve"),
+        "source": vuln_candidate.get("source"),
+        "target": {key: port_record.get(key) for key in
+                   ("id", "host_ip", "port", "protocol", "scan_id", "scan_uid", "input_target")},
+        "scope": {"scope_uid": policy.scope_uid, "policy_sha256": policy.fingerprint},
+        "result": result["status"], "reason": result["reason"], "error_code": result.get("error_code"),
+        "evidence_type": result["evidence_type"], "details": result["details"],
+        "additional_checks": result.get("additional_checks", []),
+    }
+    if result.get("positive_evidence"):
+        content["positive_evidence"] = result["positive_evidence"]
+    # Wall-clock times and repetition counters are deliberately outside the digest.
+    digest = hashlib.sha256(_json(content).encode("utf-8")).hexdigest()
+    connection = None
     try:
-        targets = (
-            get_ports_with_vuln_candidates(
-                db.conn
+        connection = get_connection()
+        locked = get_ports_with_vuln_candidates(connection, vuln_id=vuln_id, for_update=True)
+        if not locked:
+            raise VerificationConflictError("The record was removed or moved to a reviewed state")
+        locked_port, locked_vuln = locked[0]
+        if (_target_identity(locked_port, locked_vuln) != _target_identity(port_record, vuln_candidate)
+                or locked_vuln.get("source") in RETIRED_RULE_IDS):
+            raise VerificationConflictError("The target, scan or CVE changed during verification")
+        new_status = resulting_status(locked_vuln["status"], result["status"])
+        with connection.cursor(dictionary=True) as cursor:
+            cursor.execute(
+                "SELECT id, details FROM vuln_evidence WHERE vuln_id = %s AND checker = %s "
+                "AND sha256 = %s LIMIT 1 FOR UPDATE",
+                (vuln_id, result["checker"], digest),
             )
-        )
-
-        for (
-            port_record,
-            vuln_candidate,
-        ) in targets:
-            source = vuln_candidate.get("source", "")
-            if source in RETIRED_RULE_IDS or source.startswith("day4:"):
-                print(f"[REVIEW] vuln_id={vuln_candidate['id']}: "
-                      "requires a CVE-specific verifier; status preserved.")
-                continue
-            service = str(
-                port_record.get(
-                    "service"
-                )
-                or ""
-            ).lower()
-
-            port = port_record["port"]
-            protocol = port_record.get(
-                "protocol",
-                "tcp",
-            )
-            vuln_id = vuln_candidate["id"]
-
-            checkers = (
-                get_checkers_for_candidate(
-                    service,
-                    vuln_candidate,
-                )
-            )
-
-            if not checkers:
-                update_vuln_verification(
-                    conn=db.conn,
-                    vuln_id=vuln_id,
-                    status=(
-                        VulnStatus
-                        .NOT_APPLICABLE
-                    ),
-                    reason=(
-                        "등록된 검증기가 없는 "
-                        "서비스입니다: "
-                        f"{service or 'unknown'}"
-                    ),
-                )
-
-                db.conn.commit()
-                continue
-
-            results = []
-
-            try:
-                for checker in checkers:
-                    checker_name = (
-                        checker
-                        .__class__
-                        .__name__
-                    )
-
-                    result = run_checker(
-                        checker,
-                        port_record,
-                        vuln_candidate,
-                    )
-
-                    raw_status = (
-                        result["status"]
-                    )
-
-                    details = str(
-                        result.get("details")
-                        or ""
-                    )[:60000]
-
-                    evidence_path = (
-                        result.get(
-                            "evidence_path"
-                        )
-                    )
-
-                    insert_vuln_evidence(
-                        conn=db.conn,
-                        vuln_id=vuln_id,
-                        checker=checker_name,
-                        evidence_type=(
-                            evidence_type_for(
-                                checker_name,
-                                raw_status,
-                            )
-                        ),
-                        details=details,
-                        evidence_path=(
-                            evidence_path
-                        ),
-                        sha256=file_sha256(
-                            evidence_path
-                        ),
-                    )
-
-                    results.append(result)
-
-                    tag = (
-                        f"[{service.upper()}] "
-                        f"{port}/{protocol}"
-                    )
-
-                    print(
-                        f"{tag} -> "
-                        f"{checker_name}: "
-                        f"{colorize_status(raw_status)}"
-                    )
-
-                final_status = (
-                    summarize_results(
-                        results
-                    )
-                )
-
-                if (
-                    vuln_candidate.get(
-                        "status"
-                    )
-                    == VulnStatus
-                    .RETEST_REQUIRED
-                    .value
-                    and final_status
-                    == VulnStatus
-                    .POTENTIAL
-                    .value
-                ):
-                    final_status = (
-                        VulnStatus
-                        .RETEST_REQUIRED
-                        .value
-                    )
-
-                result_summary = ", ".join(
-                    result["status"]
-                    for result in results
-                )
-
-                update_vuln_verification(
-                    conn=db.conn,
-                    vuln_id=vuln_id,
-                    status=(
-                        normalize_vuln_status(
-                            final_status
-                        )
-                    ),
-                    reason=(
-                        "자동 검증 결과: "
-                        f"{result_summary}"
-                    ),
-                )
-
-                db.conn.commit()
-
-                print(
-                    "    final: "
-                    f"{colorize_status(final_status)}"
-                )
-
-            except Exception:
-                db.conn.rollback()
-                raise
-
+            existing = cursor.fetchone()
+            if existing:
+                previous = json.loads(existing["details"])
+                document = {"schema_version": 1, "content": content,
+                            "first_checked_at": previous["first_checked_at"], "last_checked_at": checked_at,
+                            "observations": int(previous.get("observations", 1)) + 1}
+                evidence_id = existing["id"]
+                cursor.execute("UPDATE vuln_evidence SET details = %s WHERE id = %s", (_json(document), evidence_id))
+            else:
+                document = {"schema_version": 1, "content": content, "first_checked_at": checked_at,
+                            "last_checked_at": checked_at, "observations": 1}
+                details = _json(document)
+                if len(details.encode("utf-8")) > 60000:
+                    raise ValueError("Verification evidence exceeds the V4 TEXT budget")
+                evidence_id = insert_vuln_evidence(connection, vuln_id, result["checker"],
+                                                   result["evidence_type"], details=details, sha256=digest)
+        update_vuln_verification(connection, vuln_id, new_status, reason=result["reason"][:500])
+        connection.commit()
+        return {"status": new_status, "evidence_id": evidence_id, "evidence_reused": bool(existing)}
+    except VerificationConflictError:
+        if connection is not None:
+            connection.rollback()
+        raise
+    except Exception as exc:
+        if connection is not None:
+            connection.rollback()
+        raise VerificationDatabaseError(f"DB_SAVE_FAILED for vuln_id={vuln_id} ({type(exc).__name__})") from exc
     finally:
-        db.close()
+        if connection is not None:
+            connection.close()
+
+
+def run_verifications(*, policy: ScopePolicy, vuln_id: int | None = None,
+                      scan_id: int | None = None, dry_run: bool = False, timeout: float = 5.0) -> list[dict]:
+    policy.validate_time()
+    targets = get_ports_with_vuln_candidates(vuln_id=vuln_id, scan_id=scan_id)
+    active = [(port, vuln) for port, vuln in targets
+              if vuln.get("source") not in RETIRED_RULE_IDS and vuln["status"] in ELIGIBLE_STATUSES]
+    authorize_selection(active, policy)
+    outcomes = []
+    for port_record, vuln in targets:
+        cve_id = vuln.get("cve_id") or vuln.get("cve") or ""
+        entry = {"vuln_id": vuln["id"], "cve_id": cve_id, "host_ip": port_record["host_ip"],
+                 "port": port_record["port"], "protocol": port_record["protocol"], "current_status": vuln["status"]}
+        if vuln.get("source") in RETIRED_RULE_IDS or vuln["status"] not in ELIGIBLE_STATUSES:
+            outcomes.append({**entry, "action": "SKIP", "reason": "retired_rule_or_reviewed_state"})
+            continue
+        checker = get_verifier(cve_id, timeout=timeout)
+        if dry_run:
+            outcomes.append({**entry, "action": "DRY_RUN", "checker": type(checker).__name__})
+            continue
+        target = _resolved_target(port_record)
+        # Validate time again before each probe; resolve only an already approved hostname.
+        authorize_selection([(port_record, vuln)], policy)
+        probe_record = dict(port_record)
+        if target.resolution_type == "HOSTNAME":
+            probe_record["server_name"] = target.input_target
+        try:
+            _check_current_hostname(target, policy)
+        except ScopeValidationError:
+            raise
+        except (ValueError, OSError):
+            result = check_result(
+                "ERROR", "Approved hostname resolution failed; the stored endpoint was not contacted.",
+                checker=type(checker).__name__, evidence_type="ERROR_LOG", error_code="DNS_RESOLUTION_ERROR",
+                details={"safe_checks": ["approved_hostname_resolution"]},
+                additional_checks=["Check DNS availability and the current approved hostname-to-IP mapping."],
+            )
+        else:
+            result = run_checker(checker, probe_record, vuln)
+        checked_at = datetime.now(timezone.utc).isoformat()
+        saved = save_verification(port_record, vuln, result, policy, checked_at)
+        outcomes.append({**entry, "action": "VERIFIED", "checked_at": checked_at,
+                         "result": result, **saved})
+    return outcomes
 
 
 if __name__ == "__main__":
-    run_verifications()
+    # Preserve the module entry point, but require the same explicit CLI selection/scope.
+    from scripts.run_verification import main
+    raise SystemExit(main())
