@@ -709,3 +709,103 @@ def get_ports_with_vuln_candidates(
     finally:
         if owns_connection:
             active_connection.close()
+
+
+def get_risk_assessment_targets(
+    *, conn=None, vuln_id=None, scan_id=None, asset_uid=None, for_update=False,
+):
+    """Day 6 selection. scan_id means the port's current scan, not historical replay.
+
+    The locked read deliberately includes newly ineligible rows so the caller can
+    skip a concurrent review/source change. No connection is retained by a preview.
+    """
+    if for_update and (conn is None or vuln_id is None):
+        raise ValueError("Locked risk lookup requires a caller transaction and vuln_id")
+    owns_connection = conn is None
+    active = conn if conn is not None else get_connection()
+    sql = """
+    SELECT v.id AS vuln_id, v.cve_id, v.source, v.status,
+           v.cvss, v.epss, p.id AS port_id, p.port, p.protocol,
+           p.last_scan_id AS scan_id, h.id AS host_id, h.asset_uid,
+           h.host_ip, h.asset_name, h.asset_type, h.environment,
+           h.criticality, h.owner, h.business_unit, h.data_classification,
+           h.internet_exposed, h.handles_personal_data, h.lifecycle_status
+    FROM vulns AS v
+    JOIN ports AS p ON p.id = v.port_id
+    JOIN hosts AS h ON h.id = p.host_id
+    WHERE 1 = 1
+    """
+    if not for_update:
+        sql += """
+        AND v.source LIKE 'day4:%'
+        AND v.status IN ('CANDIDATE', 'POTENTIAL', 'CONFIRMED', 'RETEST_REQUIRED', 'ERROR')
+        """
+    params = []
+    for value, condition in ((vuln_id, " AND v.id = %s"), (scan_id, " AND p.last_scan_id = %s"),
+                              (asset_uid, " AND h.asset_uid = %s")):
+        if value is not None:
+            sql += condition
+            params.append(value)
+    sql += " ORDER BY v.id"
+    if for_update:
+        sql += " FOR UPDATE"
+    try:
+        with active.cursor(dictionary=True) as cursor:
+            cursor.execute(sql, tuple(params))
+            return cursor.fetchall()
+    finally:
+        if owns_connection:
+            active.close()
+
+
+def upsert_risk_assessment(conn, vuln_id, details, input_sha256, assessed_at):
+    """Caller holds the joined vuln/host row locks and owns commit/rollback."""
+    with conn.cursor(dictionary=True) as cursor:
+        cursor.execute("""
+            SELECT id FROM vuln_risk_assessments
+            WHERE vuln_id = %s AND methodology_id = %s AND input_sha256 = %s
+            FOR UPDATE
+        """, (vuln_id, details["methodology_id"], input_sha256))
+        existing = cursor.fetchone()
+        if existing:
+            cursor.execute("""
+                UPDATE vuln_risk_assessments
+                SET last_assessed_at = GREATEST(last_assessed_at, %s), observations = observations + 1
+                WHERE id = %s
+            """, (assessed_at, existing["id"]))
+            return existing["id"], True
+        cvss, epss, kev, asset = (details[key] for key in ("cvss", "epss", "kev", "asset_context"))
+        cursor.execute("""
+            INSERT INTO vuln_risk_assessments (
+                vuln_id, methodology_id, methodology_sha256, vuln_status, action, priority,
+                cvss_score, cvss_version, cvss_vector, cvss_source,
+                epss_score, epss_percentile, epss_date, kev_status, kev_date_added,
+                asset_criticality, internet_exposed, handles_personal_data,
+                details, input_sha256, first_assessed_at, last_assessed_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                      %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (vuln_id, details["methodology_id"], details["methodology_sha256"], details["current_status"],
+              details["action"], details["priority"], cvss["score"], cvss["version"], cvss["vector"], cvss["source"],
+              epss["score"], epss["percentile"], epss["date"], kev["status"], kev["date_added"],
+              asset["criticality"], asset["internet_exposed"], asset["handles_personal_data"],
+              json.dumps(details, sort_keys=True, ensure_ascii=False, allow_nan=False),
+              input_sha256, assessed_at, assessed_at))
+        return cursor.lastrowid, False
+
+
+def update_risk_score_summaries(conn, vuln_id, cvss, epss):
+    """Only observed values / official absence replace summaries. Errors preserve them.
+
+    Deliberately never writes risk, severity, status, review dates or history.
+    """
+    updates, params = [], []
+    for field, result in (("cvss", cvss), ("epss", epss)):
+        if result["state"] == "OK" and result["score"] is not None:
+            updates.append(field + " = %s")
+            params.append(result["score"])
+        elif result["state"] in {"NO_SCORE", "NOT_FOUND"}:
+            updates.append(field + " = %s")
+            params.append(None)
+    if updates:
+        with conn.cursor() as cursor:
+            cursor.execute("UPDATE vulns SET " + ", ".join(updates) + " WHERE id = %s", tuple(params + [vuln_id]))

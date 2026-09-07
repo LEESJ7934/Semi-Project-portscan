@@ -262,7 +262,7 @@ CREATE TABLE IF NOT EXISTS vulns (
         'HIGH',
         'CRITICAL'
     ) NOT NULL DEFAULT 'INFO',
-    epss DECIMAL(6,5) NULL,
+    epss DECIMAL(10,9) NULL,
     cvss DECIMAL(4,2) NULL,
     risk DECIMAL(6,5) NULL,
     status ENUM(
@@ -383,4 +383,52 @@ CREATE TABLE IF NOT EXISTS remediation_history (
         FOREIGN KEY (vuln_id)
         REFERENCES vulns(id)
         ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Day 6 assessments; vulns.risk remains a preserved legacy column.
+CREATE TABLE IF NOT EXISTS vuln_risk_assessments (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    vuln_id BIGINT UNSIGNED NOT NULL,
+    methodology_id VARCHAR(64) NOT NULL,
+    methodology_sha256 CHAR(64) NOT NULL,
+    vuln_status ENUM(
+        'CANDIDATE', 'POTENTIAL', 'CONFIRMED', 'NOT_APPLICABLE',
+        'FALSE_POSITIVE', 'RETEST_REQUIRED', 'CLOSED', 'ERROR'
+    ) NOT NULL,
+    action ENUM('VERIFY', 'REMEDIATE', 'RETEST') NOT NULL,
+    priority ENUM('P1', 'P2', 'P3', 'P4', 'UNASSESSED') NOT NULL,
+    cvss_score DECIMAL(4,2) NULL,
+    cvss_version VARCHAR(16) NULL,
+    cvss_vector VARCHAR(255) NULL,
+    cvss_source VARCHAR(255) NULL,
+    epss_score DECIMAL(10,9) NULL,
+    epss_percentile DECIMAL(10,9) NULL,
+    epss_date DATE NULL,
+    kev_status ENUM('KNOWN_EXPLOITED', 'NOT_LISTED', 'UNKNOWN') NOT NULL,
+    kev_date_added DATE NULL,
+    asset_criticality ENUM('LOW', 'MEDIUM', 'HIGH', 'CRITICAL', 'UNASSIGNED') NOT NULL,
+    internet_exposed BOOLEAN NOT NULL,
+    handles_personal_data BOOLEAN NOT NULL,
+    details JSON NOT NULL,
+    input_sha256 CHAR(64) NOT NULL,
+    first_assessed_at DATETIME NOT NULL,
+    last_assessed_at DATETIME NOT NULL,
+    observations INT UNSIGNED NOT NULL DEFAULT 1,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_risk_vuln_method_input (vuln_id, methodology_id, input_sha256),
+    INDEX idx_risk_priority (priority),
+    INDEX idx_risk_last_assessed (last_assessed_at),
+    CONSTRAINT fk_risk_vuln FOREIGN KEY (vuln_id) REFERENCES vulns(id) ON DELETE CASCADE,
+    CONSTRAINT chk_risk_cvss CHECK (cvss_score BETWEEN 0 AND 10),
+    CONSTRAINT chk_risk_epss CHECK (epss_score BETWEEN 0 AND 1),
+    CONSTRAINT chk_risk_percentile CHECK (epss_percentile BETWEEN 0 AND 1),
+    CONSTRAINT chk_risk_flags CHECK (internet_exposed IN (0, 1) AND handles_personal_data IN (0, 1)),
+    CONSTRAINT chk_risk_observations CHECK (observations >= 1),
+    CONSTRAINT chk_risk_times CHECK (last_assessed_at >= first_assessed_at),
+    CONSTRAINT chk_risk_action CHECK (
+        (vuln_status IN ('CANDIDATE', 'POTENTIAL', 'ERROR') AND action = 'VERIFY') OR
+        (vuln_status = 'CONFIRMED' AND action = 'REMEDIATE') OR
+        (vuln_status = 'RETEST_REQUIRED' AND action = 'RETEST')
+    )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
