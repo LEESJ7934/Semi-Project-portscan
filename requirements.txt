@@ -1,8 +1,6 @@
 beautifulsoup4>=4.12,<5
 colorama>=0.4,<1
 mysql-connector-python>=8.0,<10
-playwright>=1.40,<2
-PyPDF2>=3,<4
 python-dotenv>=1,<2
 reportlab>=4,<5
 requests>=2.31,<3
