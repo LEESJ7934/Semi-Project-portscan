@@ -22,6 +22,25 @@
 - CVSS/EPSS/KEV·자산 맥락 기반의 설명 가능한 우선순위
 - 현재 관찰값·평가 freshness·증적·조치이력의 JSON/PDF 보고서
 
+## 아키텍처 요약
+
+```text
+승인 Scope
+  → TCP/UDP Scan
+  → Service/Version Fingerprint
+  → Asset/Port Observation
+  → Reviewed CVE Candidate
+  → Read-only Verification
+  → CVSS/EPSS/KEV + Asset Context
+  → Explainable Priority
+  → Evidence/Remediation History
+  → JSON/PDF Report
+```
+
+단계별 판단과 저장 의미는 [아키텍처 문서](docs/architecture.md)에,
+실제 검증 범위와 E2E 기록은 [검증 문서](docs/validation.md)에 정리했습니다.
+
+
 ## 1. 실행 환경 준비
 
 Windows PowerShell 기준입니다.
@@ -261,8 +280,9 @@ Windows에서는 설치된 맑은 고딕을 포함해 렌더링합니다. CJK fa
 
 ## 문서
 
+- `docs/architecture.md`: 전체 파이프라인, 설계 판단과 한계
+- `docs/validation.md`: 자동 테스트, DB/E2E 검증 범위와 Day 15 체크리스트
+- `docs/project_story.md`: 이력서·포트폴리오·면접 설명용 스토리
 - `docs/database_schema.md`: DB V5 구조와 관계
-- `docs/asset_management.md`: 자산관리·스코프·마이그레이션
-  상세 절차
-
+- `docs/asset_management.md`: 자산관리·스코프·마이그레이션 상세 절차
 - `docs/day4_service_cve_mapping.md`: 서비스 식별·CVE 규칙·V4 적용·로컬 실습
