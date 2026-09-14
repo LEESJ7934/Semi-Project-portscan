@@ -47,5 +47,5 @@ resource "aws_instance" "target" {
     systemctl daemon-reload
     systemctl enable --now portscan-demo.service
   EOF
-  tags = { Name = "portscan-target" }
+  tags      = { Name = "portscan-target" }
 }

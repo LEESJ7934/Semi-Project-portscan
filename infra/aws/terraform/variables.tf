@@ -11,13 +11,13 @@ variable "vpc_cidr" {
 }
 
 variable "scanner_subnet_cidr" {
-  type        = string
-  default     = "10.20.1.0/24"
+  type    = string
+  default = "10.20.1.0/24"
 }
 
 variable "target_subnet_cidr" {
-  type        = string
-  default     = "10.20.2.0/24"
+  type    = string
+  default = "10.20.2.0/24"
 }
 
 variable "instance_type" {
@@ -33,8 +33,8 @@ variable "enable_demo_misconfiguration" {
 }
 
 variable "flow_log_retention_days" {
-  type        = number
-  default     = 1
+  type    = number
+  default = 1
   validation {
     condition     = contains([1, 3, 5, 7, 14, 30], var.flow_log_retention_days)
     error_message = "Use a short supported CloudWatch Logs retention period for the lab."
