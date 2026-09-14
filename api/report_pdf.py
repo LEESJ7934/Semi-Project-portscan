@@ -101,6 +101,7 @@ def render_report_pdf(snapshot, output_path):
     assets = snapshot.get("assets", [])
     assets_by_uid = {asset.get("asset_uid"): asset for asset in assets}
     findings = [finding for asset in assets for finding in asset.get("findings", [])]
+    cloud_findings = [finding for asset in assets for finding in asset.get("cloud_configuration_findings", [])]
     priority_order = {value: rank for rank, value in enumerate(("P1", "P2", "P3", "P4", "UNASSESSED"))}
     findings.sort(key=lambda finding: (priority_order.get(finding.get("effective_priority"), 4), finding["vuln_id"]))
     summary = snapshot.get("summary", {})
@@ -109,12 +110,13 @@ def render_report_pdf(snapshot, output_path):
     story.append(Spacer(1, 8))
     section(1, "Report Metadata")
     fields([("generated_at_utc", snapshot.get("generated_at")), ("selection", snapshot.get("selection")),
-            ("report_basis", "Read-only V5 DB snapshot. This command does not scan, verify or refresh external intelligence.")])
+            ("report_basis", "Read-only V6-capable DB snapshot. This command does not scan, verify or refresh external intelligence.")])
 
     section(2, "Executive Summary")
-    table(["Assets", "Open ports", "Findings", "Highest priority"],
+    table(["Assets", "Open ports", "CVE findings", "AWS config", "CVE highest"],
           [[summary.get("asset_count"), summary.get("open_port_count"), summary.get("finding_count"),
-            summary.get("highest_priority", "UNASSESSED")]], [0.18, 0.22, 0.22, 0.38])
+            summary.get("cloud_configuration_finding_count", 0), summary.get("highest_priority", "UNASSESSED")]],
+          [0.14, 0.16, 0.20, 0.20, 0.30])
     story.append(p("Status counts", subheading))
     statuses = list(summary.get("status_counts", {}).items())
     status_rows = []
@@ -123,7 +125,9 @@ def render_report_pdf(snapshot, output_path):
         right = statuses[index + 1] if index + 1 < len(statuses) else ("N/A", None)
         status_rows.append([left[0], left[1], right[0], right[1]])
     table(["Status", "Count", "Status", "Count"], status_rows or [["N/A", 0, "N/A", 0]], [0.38, 0.12, 0.38, 0.12])
-    for title_label, key in (("Effective priority counts", "priority_counts"), ("Assessment freshness", "assessment_freshness_counts")):
+    for title_label, key in (("CVE effective priority counts", "priority_counts"),
+                             ("AWS configuration priority counts", "cloud_priority_counts"),
+                             ("Assessment freshness", "assessment_freshness_counts")):
         story.append(p(title_label, subheading))
         counts = summary.get(key, {}) or {"N/A": 0}
         table(list(counts), [list(counts.values())], [1 / len(counts)] * len(counts))
@@ -149,7 +153,32 @@ def render_report_pdf(snapshot, output_path):
                                                 "environment", "criticality", "owner", "business_unit", "data_classification",
                                                 "handles_personal_data", "internet_exposed", "lifecycle_status", "first_seen", "last_seen"))
 
-    section(5, "Open Ports")
+    section(5, "AWS Cloud Context / Configuration Findings")
+    cloud_assets = [asset for asset in assets if asset.get("cloud")]
+    if not cloud_assets:
+        story.append(p("N/A - no linked AWS cloud context for the selected assets."))
+    for asset in cloud_assets:
+        cloud = asset.get("cloud") or {}
+        story.append(p(asset.get("asset_name") or asset.get("asset_uid"), subheading))
+        fields((key, cloud.get(key)) for key in ("provider", "account_id", "region", "resource_type", "resource_id",
+                                                "vpc_id", "subnet_id", "private_ip", "public_ip", "instance_state",
+                                                "last_discovered_at"))
+        current = asset.get("cloud_configuration_findings", [])
+        if current:
+            table(["Rule", "Severity", "Priority", "Public IP", "Title"],
+                  [[f.get("rule_id"), f.get("severity"), f.get("priority"), f.get("public_address_present"), f.get("title")]
+                   for f in current], [0.16, 0.14, 0.14, 0.16, 0.40])
+            for finding in current:
+                story.append(p(f"{finding.get('rule_id')} evidence", subheading))
+                fields((key, finding.get(key)) for key in ("category", "status", "severity", "priority",
+                                                            "public_address_present", "first_detected_at",
+                                                            "last_detected_at", "observations", "remediation"))
+                fields([("evidence", finding.get("evidence")),
+                        ("reachability_note", "Security Group breadth and public-address presence are context only; end-to-end Internet reachability is not asserted.")])
+        else:
+            story.append(p("No OPEN AWS configuration findings stored for this cloud asset."))
+
+    section(6, "Open Ports")
     open_rows = [[asset.get("host_ip"), f"{port.get('port')}/{port.get('protocol')}", port.get("service"),
                   port.get("product"), port.get("version"), port.get("last_scan_id")]
                  for asset in assets for port in asset.get("ports", []) if port.get("state") == "open"]
@@ -160,7 +189,7 @@ def render_report_pdf(snapshot, output_path):
         story.append(p("No current open port observations. This is not proof that all ports are closed or safe."))
     story.append(p("Findings on currently observed closed/filtered endpoints retain their stored review status; port closure alone does not close a finding."))
 
-    section(6, "Findings Summary")
+    section(7, "CVE Findings Summary")
     if findings:
         table(["CVE / ID", "Status", "Priority", "Action", "Freshness"],
               [[f"{f.get('cve_id')} / {f['vuln_id']}", f.get("status"), f.get("effective_priority"),
@@ -169,7 +198,7 @@ def render_report_pdf(snapshot, output_path):
     else:
         story.append(p("No stored reviewed findings for these current port observations; this does not establish security."))
 
-    section(7, "Finding Details")
+    section(8, "CVE Finding Details")
     for finding in findings:
         story.append(p(f"{finding.get('cve_id')} / Finding {finding['vuln_id']}", subheading))
         fields((key, finding.get(key)) for key in ("title", "source", "status", "severity", "effective_priority",
@@ -187,7 +216,7 @@ def render_report_pdf(snapshot, output_path):
     if not findings:
         story.append(p("N/A"))
 
-    section(8, "Verification Evidence")
+    section(9, "CVE Verification Evidence")
     for finding in findings:
         story.append(p(f"{finding.get('cve_id')} / Finding {finding['vuln_id']}", subheading))
         if not finding.get("evidence"):
@@ -198,7 +227,7 @@ def render_report_pdf(snapshot, output_path):
     if not findings:
         story.append(p("N/A"))
 
-    section(9, "Remediation History")
+    section(10, "CVE Remediation History")
     for finding in findings:
         story.append(p(f"{finding.get('cve_id')} / Finding {finding['vuln_id']}", subheading))
         if not finding.get("history"):
@@ -208,7 +237,7 @@ def render_report_pdf(snapshot, output_path):
     if not findings:
         story.append(p("N/A"))
 
-    section(10, "Risk Assessment / Provenance")
+    section(11, "CVE Risk Assessment / Provenance")
     for finding in findings:
         story.append(p(f"{finding.get('cve_id')} / Finding {finding['vuln_id']}", subheading))
         if not finding.get("assessment"):
@@ -226,7 +255,7 @@ def render_report_pdf(snapshot, output_path):
     if not findings:
         story.append(p("N/A"))
 
-    section(11, "Report Integrity")
+    section(12, "Report Integrity")
     fields([("snapshot_sha256", snapshot.get("integrity", {}).get("snapshot_sha256")),
             ("digest_basis", "Canonical JSON with generated_at and integrity.snapshot_sha256 excluded."),
             ("integrity_limit", "The hash identifies snapshot content. It is not a signature or proof of source authenticity.")])

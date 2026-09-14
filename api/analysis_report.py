@@ -1,4 +1,4 @@
-"""Build one read-only, current-state V5 report snapshot and export it locally."""
+"""Build one read-only, current-state V6-capable report snapshot and export it locally."""
 from __future__ import annotations
 
 import hashlib
@@ -32,6 +32,12 @@ ASSESSMENT_FIELDS = ("assessment_id", "vuln_id", "methodology_id", "methodology_
                      "asset_criticality", "internet_exposed", "handles_personal_data", "input_sha256",
                      "first_assessed_at", "last_assessed_at", "observations")
 FINGERPRINT_FIELDS = ("service", "product", "version", "source", "confidence", "parser_version", "error")
+CLOUD_FIELDS = ("cloud_resource_id", "host_id", "provider", "account_id", "region", "resource_type",
+                "resource_id", "vpc_id", "subnet_id", "private_ip", "public_ip", "instance_state",
+                "first_discovered_at", "last_discovered_at")
+CLOUD_FINDING_FIELDS = ("cloud_finding_id", "cloud_resource_id", "rule_id", "category", "title", "severity",
+                        "priority", "status", "public_address_present", "remediation", "input_sha256",
+                        "first_detected_at", "last_detected_at", "resolved_at", "observations")
 
 
 class ReportSelectionError(ValueError):
@@ -100,6 +106,19 @@ def _pick(row, fields):
     return {key: json_value(row.get(key)) for key in fields}
 
 
+def _array(value):
+    if value is None or value == "":
+        return [], "MISSING"
+    try:
+        if isinstance(value, (str, bytes)):
+            value = json.loads(value, parse_constant=lambda token: (_ for _ in ()).throw(ValueError(token)))
+        if not isinstance(value, list):
+            raise ValueError("Expected JSON array")
+        return json_value(value), "PARSED"
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        return [], "PARSE_ERROR"
+
+
 def _select(cursor, sql, params=()):
     cursor.execute(sql, tuple(params))
     return cursor.fetchall()
@@ -154,10 +173,38 @@ def _read_rows(conn, selection):
                    v.first_detected_at, v.last_detected_at, v.verified_at, v.closed_at
             FROM vulns AS v WHERE v.port_id IN
         """, [row["port_id"] for row in ports], "AND v.source LIKE 'day4:%' ORDER BY v.id")
-        return cursor_rows(cursor, assets, scans, ports, findings)
+        cloud_resources, cloud_findings = [], []
+        cloud_select = """
+            SELECT cr.id AS cloud_resource_id, cr.host_id, cr.provider, cr.account_id, cr.region,
+                   cr.resource_type, cr.resource_id, cr.vpc_id, cr.subnet_id, cr.private_ip,
+                   cr.public_ip, cr.instance_state, cr.security_groups, cr.tags,
+                   cr.first_discovered_at, cr.last_discovered_at
+            FROM cloud_resources AS cr WHERE cr.{column} IN
+        """
+        seen_cloud_ids = set()
+        lookup_groups = (
+            ("host_id", [row["id"] for row in assets if row.get("asset_type") == "CLOUD_RESOURCE"]),
+            ("private_ip", [row["host_ip"] for row in assets if row.get("host_ip")]),
+            ("public_ip", [row["host_ip"] for row in assets if row.get("host_ip")]),
+        )
+        for column, values in lookup_groups:
+            for row in _related(cursor, cloud_select.format(column=column), values, "ORDER BY cr.host_id, cr.id"):
+                if row["cloud_resource_id"] not in seen_cloud_ids:
+                    seen_cloud_ids.add(row["cloud_resource_id"])
+                    cloud_resources.append(row)
+        if cloud_resources:
+            cloud_findings = _related(cursor, """
+                SELECT cf.id AS cloud_finding_id, cf.cloud_resource_id, cf.rule_id, cf.category,
+                       cf.title, cf.severity, cf.priority, cf.status, cf.public_address_present,
+                       cf.evidence, cf.remediation, cf.input_sha256, cf.first_detected_at,
+                       cf.last_detected_at, cf.resolved_at, cf.observations
+                FROM cloud_configuration_findings AS cf WHERE cf.cloud_resource_id IN
+            """, [row["cloud_resource_id"] for row in cloud_resources],
+            "AND cf.status = 'OPEN' ORDER BY cf.cloud_resource_id, cf.rule_id")
+        return cursor_rows(cursor, assets, scans, ports, findings, cloud_resources, cloud_findings)
 
 
-def cursor_rows(cursor, assets, scans, ports, findings):
+def cursor_rows(cursor, assets, scans, ports, findings, cloud_resources=None, cloud_findings=None):
     try:
         reviewed = {rule["id"]: rule["cve"] for rule in load_catalog()[0]["rules"]}
     except (OSError, ValueError, KeyError) as exc:
@@ -185,7 +232,7 @@ def cursor_rows(cursor, assets, scans, ports, findings):
                rh.action_type, rh.reason, rh.changed_by, rh.changed_at
         FROM remediation_history AS rh WHERE rh.vuln_id IN
     """, ids, "ORDER BY rh.changed_at, rh.id")
-    return assets, scans, ports, findings, assessments, evidence, history
+    return assets, scans, ports, findings, assessments, evidence, history, (cloud_resources or []), (cloud_findings or [])
 
 
 def parse_evidence(row):
@@ -269,13 +316,48 @@ def snapshot_sha256(snapshot):
 
 
 def _assemble(selection, rows):
-    assets, scans, ports, findings, assessments, evidence, history = rows
+    assets, scans, ports, findings, assessments, evidence, history, cloud_resources, cloud_findings = rows
     by_asset = {}
     for row in sorted(assets, key=lambda row: row["id"]):
         item = _pick(row, ASSET_FIELDS)
         for key in ("internet_exposed", "handles_personal_data"):
             item[key] = _boolean(row.get(key))
-        by_asset[row["id"]] = {**item, "ports": [], "findings": []}
+        by_asset[row["id"]] = {**item, "ports": [], "findings": [],
+                                "cloud": None, "cloud_configuration_findings": []}
+    cloud_by_id = {}
+    cloud_asset_links = {}
+    asset_ids_by_ip = {}
+    for asset_id, asset in by_asset.items():
+        if asset.get("host_ip"):
+            asset_ids_by_ip.setdefault(asset["host_ip"], []).append(asset_id)
+    for row in cloud_resources:
+        item = _pick(row, CLOUD_FIELDS)
+        groups, groups_state = _array(row.get("security_groups"))
+        tags, tags_state = _object(row.get("tags"))
+        item["security_groups"] = groups
+        item["security_groups_status"] = groups_state
+        item["tags"] = tags if tags_state == "PARSED" else {}
+        item["tags_status"] = tags_state
+        cloud_by_id[item["cloud_resource_id"]] = item
+        linked_asset_ids = set()
+        if item["host_id"] in by_asset:
+            linked_asset_ids.add(item["host_id"])
+        for address in (item.get("private_ip"), item.get("public_ip")):
+            linked_asset_ids.update(asset_ids_by_ip.get(address, []))
+        cloud_asset_links[item["cloud_resource_id"]] = sorted(linked_asset_ids)
+        for asset_id in linked_asset_ids:
+            by_asset[asset_id]["cloud"] = item
+    cloud_priority_counts = dict.fromkeys(PRIORITIES, 0)
+    for row in cloud_findings:
+        item = _pick(row, CLOUD_FINDING_FIELDS)
+        item["public_address_present"] = _boolean(row.get("public_address_present"))
+        evidence_doc, evidence_state = _object(row.get("evidence"))
+        item["evidence"] = evidence_doc if evidence_state == "PARSED" else {}
+        item["evidence_status"] = evidence_state
+        for asset_id in cloud_asset_links.get(item["cloud_resource_id"], []):
+            by_asset[asset_id]["cloud_configuration_findings"].append(item)
+        if item.get("priority") in cloud_priority_counts:
+            cloud_priority_counts[item["priority"]] += 1
     by_port = {}
     for row in sorted(ports, key=lambda row: (row["host_id"], row["port"], row["protocol"], row["port_id"])):
         item = _pick(row, PORT_FIELDS)
@@ -291,9 +373,14 @@ def _assemble(selection, rows):
         history_by.setdefault(row["vuln_id"], []).append(_pick(row, ("history_id", "from_status", "to_status",
                                                         "action_type", "reason", "changed_by", "changed_at")))
     summary = {"asset_count": len(by_asset), "open_port_count": sum(p["state"] == "open" for p in ports),
-               "finding_count": len(findings), "status_counts": {status.value: 0 for status in VulnStatus},
-               "priority_counts": dict.fromkeys(PRIORITIES, 0), "assessment_freshness_counts": dict.fromkeys(FRESHNESS, 0),
-               "highest_priority": "UNASSESSED", "coverage_note": COVERAGE_NOTE, "freshness_note": FRESHNESS_NOTE}
+               "finding_count": len(findings), "cloud_configuration_finding_count": len(cloud_findings),
+               "status_counts": {status.value: 0 for status in VulnStatus},
+               "priority_counts": dict.fromkeys(PRIORITIES, 0),
+               "cloud_priority_counts": cloud_priority_counts,
+               "assessment_freshness_counts": dict.fromkeys(FRESHNESS, 0),
+               "highest_priority": "UNASSESSED",
+               "highest_cloud_priority": next((level for level in PRIORITIES if cloud_priority_counts[level]), "UNASSESSED"),
+               "coverage_note": COVERAGE_NOTE, "freshness_note": FRESHNESS_NOTE}
     for row in findings:
         item = _pick(row, FINDING_FIELDS)
         port = by_port[item["port_id"]]
@@ -326,7 +413,7 @@ def _assemble(selection, rows):
             item.update(requested_targets=None, requested_targets_status="PARSE_ERROR")
         item["scope"] = _pick(row, ("scope_uid", "authorization_ref", "approved_by", "valid_from", "valid_until", "policy_sha256"))
         scan_documents.append(item)
-    snapshot = {"schema_version": 1, "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    snapshot = {"schema_version": 2, "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "selection": selection, "summary": summary, "scans": scan_documents, "assets": list(by_asset.values()),
                 "integrity": {"algorithm": "SHA-256", "digest_excludes": ["generated_at", "integrity.snapshot_sha256"]}}
     snapshot["integrity"]["snapshot_sha256"] = snapshot_sha256(snapshot)

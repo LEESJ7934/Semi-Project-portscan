@@ -27,3 +27,12 @@ screenshots/
 # Local authorization scope
 config/scope.local.json
 config/scope.*.local.json
+
+# Terraform local state / caches
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+.terraform.tfstate.lock.info

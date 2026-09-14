@@ -434,3 +434,42 @@ Nuclei 결과 하나로 자동 CONFIRMED하지 않는다.
 
 이 질문들에 코드 전체를 외우지 않고도
 `문제 → 판단 → 구현 → 검증 → 한계` 순서로 답할 수 있으면 된다.
+
+## 12. AWS 보안 아키텍처 확장
+
+초기 프로젝트에서는 AWS EC2 공인 IP를 직접 실습 대상으로 사용한 경험이 있었지만, 그 자체만으로는 클라우드 보안 아키텍처 이해를 충분히 설명하기 어려웠습니다. 그래서 최종 확장에서는 단순히 EC2에서 스캐너를 실행하는 것이 아니라 아래 구조로 재설계했습니다.
+
+```text
+AWS VPC
+├─ Scanner EC2
+│  ├─ inbound 관리 포트 없음
+│  ├─ SSM Session Manager
+│  └─ IAM Role 기반 read-only AWS inventory
+└─ Target EC2
+   ├─ public IP 없음
+   └─ Scanner Security Group에서만 8080 허용
+
+AWS API -> Asset Inventory -> Approved Scope -> Private-IP Scan
+                         └-> Security Group Configuration Review
+```
+
+추가한 내용:
+
+- Terraform으로 VPC/Subnet/Route/EC2/SG/IAM/Flow Logs 재현
+- boto3 `DescribeInstances`, `DescribeSecurityGroups`, `GetCallerIdentity` 기반 read-only inventory
+- AWS EC2 context를 기존 `hosts`와 V6 `cloud_resources`에 연결
+- SSH/RDP/DB 포트의 `0.0.0.0/0`, `::/0` 과다 허용을 CVE가 아닌 `CONFIGURATION` finding으로 분리
+- public IP 존재 여부는 우선순위 문맥으로만 사용하고, 실제 인터넷 도달성을 과장하지 않음
+- 새로 발견한 EC2를 자동 스캔하지 않고 기존 승인 Scope를 계속 적용
+- Flow Logs와 CloudTrail Event History를 실행 증적으로 사용하고 실습 후 Terraform destroy
+
+면접에서는 다음처럼 설명합니다.
+
+> 과거에는 EC2 공인 IP를 직접 대상으로 사용했지만, 개선 과정에서는 클라우드 자산 발견과 스캔 권한을 분리했습니다. VPC 내부 Scanner/Target을 분리하고 Target은 private IP만 사용했으며, Scanner는 SSM과 Instance Role을 사용했습니다. AWS API로 EC2와 Security Group을 읽기 전용 수집한 뒤 기존 승인 Scope를 통과한 자산만 포트 진단하도록 했고, CVE와 Security Group 설정 위험도 별도 finding으로 관리했습니다.
+
+### AWS 확장 한계
+
+- AWS 전체 CSPM 제품이 아니다.
+- EC2/SG만 다루며 IAM posture, RDS/EKS, Organizations, GuardDuty/Security Hub는 범위 밖이다.
+- `hosts.host_ip`가 unique이므로 overlapping CIDR을 가진 다중 VPC/다중 계정 통합 자산관리는 이번 V6 범위가 아니다.
+- SG의 broad ingress와 public IP는 위험 신호이지 end-to-end Internet reachability 증명이 아니다.

@@ -1,4 +1,4 @@
-"""Read-only report data tests against a V5 DB-API fixture; no MySQL or external I/O."""
+"""Read-only report data tests against a V6-capable DB-API fixture; no MySQL or external I/O."""
 import contextlib
 import copy
 import json
@@ -68,7 +68,9 @@ def fixture_data():
             "history": [{"history_id": 2, "vuln_id": 101, "from_status": "CANDIDATE", "to_status": "POTENTIAL", "action_type": "STATUS_CHANGE",
                          "reason": "추가 확인 필요", "changed_by": "verifier", "changed_at": NOW},
                         {"history_id": 1, "vuln_id": 101, "from_status": None, "to_status": "CANDIDATE", "action_type": "STATUS_CHANGE",
-                         "reason": "후보 생성", "changed_by": "mapper", "changed_at": datetime(2026, 9, 7)}]}
+                         "reason": "후보 생성", "changed_by": "mapper", "changed_at": datetime(2026, 9, 7)}],
+            "cloud_resources": [],
+            "cloud_findings": []}
 
 
 class FixtureDB:
@@ -166,6 +168,18 @@ class FixtureCursor:
             self.rows = [row for row in data["evidence"] if row["vuln_id"] in params]
         elif text.startswith("SELECT rh.id AS history_id"):
             self.rows = [row for row in data["history"] if row["vuln_id"] in params]
+        elif text.startswith("SELECT cr.id AS cloud_resource_id"):
+            if "cr.host_id IN" in text:
+                self.rows = [row for row in data["cloud_resources"] if row["host_id"] in params]
+            elif "cr.private_ip IN" in text:
+                self.rows = [row for row in data["cloud_resources"] if row.get("private_ip") in params]
+            elif "cr.public_ip IN" in text:
+                self.rows = [row for row in data["cloud_resources"] if row.get("public_ip") in params]
+            else:
+                raise AssertionError("Unexpected cloud resource SELECT: " + text)
+        elif text.startswith("SELECT cf.id AS cloud_finding_id"):
+            self.rows = [row for row in data["cloud_findings"]
+                         if row["cloud_resource_id"] in params and row["status"] == "OPEN"]
         else:
             raise AssertionError("Unexpected SELECT: " + text)
 
@@ -197,6 +211,63 @@ class AnalysisReportTests(unittest.TestCase):
         self.assertEqual([p["port_id"] for p in report["assets"][0]["ports"]], [13, 11])
         self.assertEqual(report["scans"][0]["scope"]["authorization_ref"], "LAB-APPROVAL")
         self.assertEqual(report["scans"][0]["requested_targets"], ["localhost"])
+
+
+    def test_cloud_asset_context_and_configuration_findings_are_separate_from_cves(self):
+        self.db.data["hosts"][0]["asset_type"] = "CLOUD_RESOURCE"
+        self.db.data["hosts"][0]["host_ip"] = "10.20.2.10"
+        self.db.data["cloud_resources"] = [{
+            "cloud_resource_id": 501, "host_id": 1, "provider": "AWS", "account_id": "123456789012",
+            "region": "ap-northeast-2", "resource_type": "EC2", "resource_id": "i-demo",
+            "vpc_id": "vpc-demo", "subnet_id": "subnet-demo", "private_ip": "10.20.2.10",
+            "public_ip": None, "instance_state": "running",
+            "security_groups": json.dumps([{"group_id": "sg-demo"}]),
+            "tags": json.dumps({"Name": "target"}), "first_discovered_at": NOW, "last_discovered_at": NOW,
+        }]
+        self.db.data["cloud_findings"] = [{
+            "cloud_finding_id": 601, "cloud_resource_id": 501, "rule_id": "AWS-SG-001",
+            "category": "NETWORK_EXPOSURE", "title": "SSH ingress is open to the Internet",
+            "severity": "HIGH", "priority": "P3", "status": "OPEN", "public_address_present": 0,
+            "evidence": json.dumps({"public_address_present": False}), "remediation": "restrict",
+            "input_sha256": "9" * 64, "first_detected_at": NOW, "last_detected_at": NOW,
+            "resolved_at": None, "observations": 1,
+        }]
+        report = self.build()
+        asset = report["assets"][0]
+        self.assertEqual(asset["cloud"]["resource_id"], "i-demo")
+        self.assertEqual(asset["cloud"]["security_groups"], [{"group_id": "sg-demo"}])
+        self.assertEqual(asset["cloud_configuration_findings"][0]["rule_id"], "AWS-SG-001")
+        self.assertEqual(report["summary"]["cloud_configuration_finding_count"], 1)
+        self.assertEqual(report["summary"]["cloud_priority_counts"]["P3"], 1)
+        self.assertEqual(report["summary"]["finding_count"], 1)
+
+    def test_public_ip_scan_asset_links_to_cloud_inventory_private_host(self):
+        self.db.data["hosts"][0]["host_ip"] = "203.0.113.45"
+        self.db.data["hosts"][0]["asset_type"] = "SERVER"
+        self.db.data["cloud_resources"] = [{
+            "cloud_resource_id": 777, "host_id": 2, "provider": "AWS", "account_id": "123456789012",
+            "region": "ap-northeast-2", "resource_type": "EC2", "resource_id": "i-public-link",
+            "vpc_id": "vpc-demo", "subnet_id": "subnet-demo", "private_ip": "10.0.0.10",
+            "public_ip": "203.0.113.45", "instance_state": "running",
+            "security_groups": json.dumps([{"group_id": "sg-public-link"}]),
+            "tags": json.dumps({"Name": "target"}), "first_discovered_at": NOW, "last_discovered_at": NOW,
+        }]
+        self.db.data["cloud_findings"] = [{
+            "cloud_finding_id": 778, "cloud_resource_id": 777, "rule_id": "AWS-SG-001",
+            "category": "NETWORK_EXPOSURE", "title": "SSH ingress is open to the Internet",
+            "severity": "HIGH", "priority": "P2", "status": "OPEN", "public_address_present": 1,
+            "evidence": json.dumps({"public_address_present": True}), "remediation": "restrict",
+            "input_sha256": "8" * 64, "first_detected_at": NOW, "last_detected_at": NOW,
+            "resolved_at": None, "observations": 1,
+        }]
+
+        report = self.build()
+        asset = report["assets"][0]
+        self.assertEqual(asset["cloud"]["resource_id"], "i-public-link")
+        self.assertEqual(asset["cloud"]["private_ip"], "10.0.0.10")
+        self.assertEqual(asset["cloud"]["public_ip"], "203.0.113.45")
+        self.assertEqual(asset["cloud_configuration_findings"][0]["rule_id"], "AWS-SG-001")
+        self.assertEqual(report["summary"]["cloud_configuration_finding_count"], 1)
 
     def test_scan_selection_current_ports_even_when_host_has_newer_scan(self):
         report = build_report_snapshot(scan_id=4)

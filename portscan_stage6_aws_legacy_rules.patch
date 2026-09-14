@@ -1,0 +1,84 @@
+diff --git a/README.md b/README.md
+index 0bbadb2..ce74549 100644
+--- a/README.md
++++ b/README.md
+@@ -353,3 +353,5 @@ py -m scripts.run_scan scan `
+ ```
+ 
+ V6 보고서는 CVE findings와 AWS configuration findings를 별도 항목으로 표시합니다. Security Group이 Internet-wide CIDR를 포함해도 라우팅/NACL/host firewall까지 계산하지 않으므로 실제 인터넷 도달성을 확정하지 않습니다.
++
++현재 SG 설정 진단은 SSH(22), RDP(3389), MySQL(3306), PostgreSQL(5432), MongoDB(27017), FTP(21), Telnet(23), 전체 포트/프로토콜의 Internet-wide ingress를 별도 configuration finding으로 분류합니다.
+diff --git a/cloud_security/aws_sg_analyzer.py b/cloud_security/aws_sg_analyzer.py
+index 496e9d2..d09e1e9 100644
+--- a/cloud_security/aws_sg_analyzer.py
++++ b/cloud_security/aws_sg_analyzer.py
+@@ -16,6 +16,8 @@ SENSITIVE_RULES = (
+     ("AWS-SG-003", 3306, "Security Group allows Internet-wide MySQL ingress"),
+     ("AWS-SG-004", 5432, "Security Group allows Internet-wide PostgreSQL ingress"),
+     ("AWS-SG-005", 27017, "Security Group allows Internet-wide MongoDB ingress"),
++    ("AWS-SG-007", 21, "Security Group allows Internet-wide FTP ingress"),
++    ("AWS-SG-008", 23, "Security Group allows Internet-wide Telnet ingress"),
+ )
+ BROAD_V4 = "0.0.0.0/0"
+ BROAD_V6 = "::/0"
+diff --git a/docs/aws_validation.md b/docs/aws_validation.md
+index 7500043..c530e3e 100644
+--- a/docs/aws_validation.md
++++ b/docs/aws_validation.md
+@@ -52,6 +52,8 @@ python -m scripts.run_scan scan --target <target-private-ip> --ports 22,8080 --s
+ 
+ Expected normal-lab result: TCP/8080 open; TCP/22 is not required to be open merely because a Security Group rule exists.
+ 
++For a legacy self-owned lab EC2, `AWS-SG-007` (FTP/21) and `AWS-SG-008` (Telnet/23) are also reported when those ports are Internet-wide. These are configuration findings, not proof that an FTP/Telnet daemon is actually listening.
++
+ ## 6. Optional configuration-finding demonstration
+ 
+ Set `enable_demo_misconfiguration=true`, apply, and rerun `aws_security_review`. Expected finding:
+diff --git a/requirements.txt b/requirements.txt
+index f13574f..a81a7e7 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,5 +1,6 @@
+ beautifulsoup4>=4.12,<5
+ boto3>=1.35,<2
++botocore[crt]>=1.35,<2
+ colorama>=0.4,<1
+ mysql-connector-python>=8.0,<10
+ python-dotenv>=1,<2
+diff --git a/tests/test_aws_sg_analyzer.py b/tests/test_aws_sg_analyzer.py
+index 88f6061..62e85dc 100644
+--- a/tests/test_aws_sg_analyzer.py
++++ b/tests/test_aws_sg_analyzer.py
+@@ -67,7 +67,7 @@ class AwsSecurityGroupAnalyzerTests(unittest.TestCase):
+             "security_groups": [
+                 {"group_id": "sg-b", "ip_permissions": [{"IpProtocol": "tcp", "FromPort": 22, "ToPort": 22,
+                                                            "IpRanges": [{"CidrIp": "0.0.0.0/0"}]}]},
+-                {"group_id": "sg-a", "ip_permissions": [{"IpProtocol": "tcp", "FromPort": 20, "ToPort": 30,
++                {"group_id": "sg-a", "ip_permissions": [{"IpProtocol": "tcp", "FromPort": 22, "ToPort": 22,
+                                                            "Ipv6Ranges": [{"CidrIpv6": "::/0"}]}]},
+             ],
+         }]}
+@@ -78,5 +78,23 @@ class AwsSecurityGroupAnalyzerTests(unittest.TestCase):
+         self.assertEqual([m["security_group_id"] for m in first[0]["evidence"]["matched_permissions"]], ["sg-a", "sg-b"])
+ 
+ 
++    def test_legacy_lab_ftp_and_telnet_world_open_are_findings(self):
++        inv = {"resources": [{
++            "resource_id": "i-legacy", "private_ip": "172.31.36.74",
++            "public_ip": "203.0.113.10", "vpc_id": "vpc-legacy",
++            "security_groups": [{"group_id": "sg-legacy", "ip_permissions": [
++                {"IpProtocol": "tcp", "FromPort": 21, "ToPort": 21,
++                 "IpRanges": [{"CidrIp": "0.0.0.0/0"}], "Ipv6Ranges": []},
++                {"IpProtocol": "tcp", "FromPort": 23, "ToPort": 23,
++                 "IpRanges": [{"CidrIp": "0.0.0.0/0"}], "Ipv6Ranges": []},
++            ]}],
++        }]}
++        findings = analyze_security_groups(inv)
++        self.assertEqual(
++            [(f["rule_id"], f["severity"], f["priority"]) for f in findings],
++            [("AWS-SG-007", "HIGH", "P2"), ("AWS-SG-008", "HIGH", "P2")],
++        )
++
++
+ if __name__ == "__main__":
+     unittest.main()

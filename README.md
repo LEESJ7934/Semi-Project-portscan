@@ -72,21 +72,22 @@ docker compose -f .\docker\docker-compose.yml ps
 docker inspect -f "{{.State.Health.Status}}" portscan-mysql
 ```
 
-새 볼륨에서는 V5가 반영된 `sql/init.sql`이 자동 실행됩니다.
+새 볼륨에서는 V6가 반영된 `sql/init.sql`이 자동 실행됩니다.
 기존 DB는 외부 덤프를 백업하고 현재 버전에서 순서대로 마이그레이션합니다.
 
 | 현재 DB | 실행할 파일 |
 |---|---|
-| V2 | `migration_v3.sql` → `migration_v3_1.sql` → `migration_v4.sql` → `migration_v5.sql` |
-| V3 | `migration_v3_1.sql` → `migration_v4.sql` → `migration_v5.sql` |
-| V3.1 (3일차 완료) | `migration_v4.sql` → `migration_v5.sql` |
-| V4 | `migration_v5.sql` |
-| V5 (6일차 완료) | 실행할 마이그레이션 없음 |
+| V2 | `migration_v3.sql` → `migration_v3_1.sql` → `migration_v4.sql` → `migration_v5.sql` → `migration_v6.sql` |
+| V3 | `migration_v3_1.sql` → `migration_v4.sql` → `migration_v5.sql` → `migration_v6.sql` |
+| V3.1 (3일차 완료) | `migration_v4.sql` → `migration_v5.sql` → `migration_v6.sql` |
+| V4 | `migration_v5.sql` → `migration_v6.sql` |
+| V5 (6일차 완료) | `migration_v6.sql` |
+| V6 (AWS 확장) | 실행할 마이그레이션 없음 |
 
 백업·오류 확인을 포함한 PowerShell 절차는
 [4일차 실행 안내](docs/day4_service_cve_mapping.md)를 따릅니다.
 기존 V2/V3 마이그레이션은 재실행하지 않습니다.
-현재 기준 DB는 **V5**이며 Day 7에는 migration이 없습니다.
+기존 보안진단 기준 DB는 V5였고 AWS 확장 후 현재 기준 DB는 **V6**입니다.
 V4에서 V5로 이동할 때는 외부 DB 덤프를 만든 뒤 다음을 실행합니다.
 
 ```powershell
@@ -256,7 +257,7 @@ py -m scripts.generate_report --scan-id <SCAN_ID> --format json
 `--format json|pdf|both`를 지원합니다. stdout JSON에서 출력 경로와 snapshot SHA-256을 확인합니다.
 기존 `py -m api.generate_final_report`도 같은 옵션의 호환 진입점입니다. IP 위치 인수는 지원하지 않습니다.
 
-보고서는 하나의 read-only consistent DB transaction으로 V5 결과를 읽습니다.
+보고서는 하나의 read-only consistent DB transaction으로 V5/V6 결과를 읽습니다.
 스캔·분석·검증·위협정보 조회·Shodan 접속을 자동 실행하지 않습니다.
 자산은 `p.last_scan_id = h.last_scan_id`, scan은 `p.last_scan_id = 선택한 scan ID`인 관찰만 사용합니다.
 scan 선택은 `scan_assets`에 연결된 자산도 보여주지만 자산 metadata는 현재 값입니다.
@@ -283,6 +284,74 @@ Windows에서는 설치된 맑은 고딕을 포함해 렌더링합니다. CJK fa
 - `docs/architecture.md`: 전체 파이프라인, 설계 판단과 한계
 - `docs/validation.md`: 자동 테스트, DB/E2E 검증 범위와 Day 15 체크리스트
 - `docs/project_story.md`: 이력서·포트폴리오·면접 설명용 스토리
-- `docs/database_schema.md`: DB V5 구조와 관계
+- `docs/database_schema.md`: DB V5 기본 구조와 관계 (`sql/migration_v6.sql`에서 AWS 확장)
 - `docs/asset_management.md`: 자산관리·스코프·마이그레이션 상세 절차
 - `docs/day4_service_cve_mapping.md`: 서비스 식별·CVE 규칙·V4 적용·로컬 실습
+
+## 11. AWS VPC 보안 아키텍처 확장 (V6)
+
+기존 로컬/공인 IP 중심 실습에서 한 단계 확장해, AWS VPC 안에서 EC2 자산과 Security Group 구성을 읽기 전용으로 수집하고 승인된 private IP만 기존 스캐너로 진단할 수 있습니다.
+
+핵심 원칙:
+
+- AWS discovery != scan authorization
+- AWS Access Key/Secret Key를 저장소나 `.env`에 저장하지 않음
+- Scanner EC2는 IAM Instance Profile과 SSM Session Manager 사용
+- Target EC2는 public IP 없음
+- Target 8080은 Scanner Security Group에서만 허용
+- SG 과다노출은 `cloud_configuration_findings`에 저장하고 CVE와 분리
+- VPC Flow Logs는 네트워크 증적, CloudTrail Event History는 관리 API 증적으로 사용
+
+구조와 제약은 `docs/aws_architecture.md`, 실제 검증 순서는 `docs/aws_validation.md`를 참고합니다.
+
+### Terraform
+
+```powershell
+terraform -chdir=infra/aws/terraform init
+terraform -chdir=infra/aws/terraform validate
+terraform -chdir=infra/aws/terraform plan
+terraform -chdir=infra/aws/terraform apply
+```
+
+기본값은 `enable_demo_misconfiguration=false`입니다.
+
+### DB V6
+
+V5 적용 후:
+
+```powershell
+Get-Content -Raw -Encoding UTF8 .\sql\migration_v6.sql | docker exec -i portscan-mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root --default-character-set=utf8mb4 -D port_scan'
+Get-Content -Raw -Encoding UTF8 .\sql\verify_v6.sql | docker exec -i portscan-mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root --default-character-set=utf8mb4 -D port_scan'
+```
+
+환경에 맞는 MySQL 사용자/컨테이너 명령을 사용하고, 비밀번호를 shell history나 저장소에 남기지 않습니다.
+
+### AWS inventory / SG review
+
+먼저 DB write 없는 read-only preview:
+
+```powershell
+py -m scripts.aws_inventory --region ap-northeast-2 --vpc-id <VPC_ID>
+py -m scripts.aws_security_review --region ap-northeast-2 --vpc-id <VPC_ID>
+```
+
+V6 DB에 저장할 때만 `--save`를 붙입니다.
+
+```powershell
+py -m scripts.aws_inventory --region ap-northeast-2 --vpc-id <VPC_ID> --save
+py -m scripts.aws_security_review --region ap-northeast-2 --vpc-id <VPC_ID> --save
+```
+
+AWS API로 발견한 EC2는 자동 스캔하지 않습니다. 실제 진단은 기존 `ScopePolicy`를 통과해야 합니다.
+
+```powershell
+py -m scripts.run_scan scan `
+  --target <TARGET_PRIVATE_IP> `
+  --ports 22,8080 `
+  --scope-file .\config\scope.aws.example.json `
+  -sT -sV
+```
+
+V6 보고서는 CVE findings와 AWS configuration findings를 별도 항목으로 표시합니다. Security Group이 Internet-wide CIDR를 포함해도 라우팅/NACL/host firewall까지 계산하지 않으므로 실제 인터넷 도달성을 확정하지 않습니다.
+
+현재 SG 설정 진단은 SSH(22), RDP(3389), MySQL(3306), PostgreSQL(5432), MongoDB(27017), FTP(21), Telnet(23), 전체 포트/프로토콜의 Internet-wide ingress를 별도 configuration finding으로 분류합니다.

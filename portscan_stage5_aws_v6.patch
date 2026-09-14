@@ -1,0 +1,2391 @@
+diff --git a/.gitignore b/.gitignore
+index 1050187..8190f8b 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -27,3 +27,12 @@ screenshots/
+ # Local authorization scope
+ config/scope.local.json
+ config/scope.*.local.json
++
++# Terraform local state / caches
++.terraform/
++*.tfstate
++*.tfstate.*
++*.tfvars
++!*.tfvars.example
++crash.log
++.terraform.tfstate.lock.info
+diff --git a/README.md b/README.md
+index c752bba..0bbadb2 100644
+--- a/README.md
++++ b/README.md
+@@ -72,21 +72,22 @@ docker compose -f .\docker\docker-compose.yml ps
+ docker inspect -f "{{.State.Health.Status}}" portscan-mysql
+ ```
+ 
+-새 볼륨에서는 V5가 반영된 `sql/init.sql`이 자동 실행됩니다.
++새 볼륨에서는 V6가 반영된 `sql/init.sql`이 자동 실행됩니다.
+ 기존 DB는 외부 덤프를 백업하고 현재 버전에서 순서대로 마이그레이션합니다.
+ 
+ | 현재 DB | 실행할 파일 |
+ |---|---|
+-| V2 | `migration_v3.sql` → `migration_v3_1.sql` → `migration_v4.sql` → `migration_v5.sql` |
+-| V3 | `migration_v3_1.sql` → `migration_v4.sql` → `migration_v5.sql` |
+-| V3.1 (3일차 완료) | `migration_v4.sql` → `migration_v5.sql` |
+-| V4 | `migration_v5.sql` |
+-| V5 (6일차 완료) | 실행할 마이그레이션 없음 |
++| V2 | `migration_v3.sql` → `migration_v3_1.sql` → `migration_v4.sql` → `migration_v5.sql` → `migration_v6.sql` |
++| V3 | `migration_v3_1.sql` → `migration_v4.sql` → `migration_v5.sql` → `migration_v6.sql` |
++| V3.1 (3일차 완료) | `migration_v4.sql` → `migration_v5.sql` → `migration_v6.sql` |
++| V4 | `migration_v5.sql` → `migration_v6.sql` |
++| V5 (6일차 완료) | `migration_v6.sql` |
++| V6 (AWS 확장) | 실행할 마이그레이션 없음 |
+ 
+ 백업·오류 확인을 포함한 PowerShell 절차는
+ [4일차 실행 안내](docs/day4_service_cve_mapping.md)를 따릅니다.
+ 기존 V2/V3 마이그레이션은 재실행하지 않습니다.
+-현재 기준 DB는 **V5**이며 Day 7에는 migration이 없습니다.
++기존 보안진단 기준 DB는 V5였고 AWS 확장 후 현재 기준 DB는 **V6**입니다.
+ V4에서 V5로 이동할 때는 외부 DB 덤프를 만든 뒤 다음을 실행합니다.
+ 
+ ```powershell
+@@ -256,7 +257,7 @@ py -m scripts.generate_report --scan-id <SCAN_ID> --format json
+ `--format json|pdf|both`를 지원합니다. stdout JSON에서 출력 경로와 snapshot SHA-256을 확인합니다.
+ 기존 `py -m api.generate_final_report`도 같은 옵션의 호환 진입점입니다. IP 위치 인수는 지원하지 않습니다.
+ 
+-보고서는 하나의 read-only consistent DB transaction으로 V5 결과를 읽습니다.
++보고서는 하나의 read-only consistent DB transaction으로 V5/V6 결과를 읽습니다.
+ 스캔·분석·검증·위협정보 조회·Shodan 접속을 자동 실행하지 않습니다.
+ 자산은 `p.last_scan_id = h.last_scan_id`, scan은 `p.last_scan_id = 선택한 scan ID`인 관찰만 사용합니다.
+ scan 선택은 `scan_assets`에 연결된 자산도 보여주지만 자산 metadata는 현재 값입니다.
+@@ -283,6 +284,72 @@ Windows에서는 설치된 맑은 고딕을 포함해 렌더링합니다. CJK fa
+ - `docs/architecture.md`: 전체 파이프라인, 설계 판단과 한계
+ - `docs/validation.md`: 자동 테스트, DB/E2E 검증 범위와 Day 15 체크리스트
+ - `docs/project_story.md`: 이력서·포트폴리오·면접 설명용 스토리
+-- `docs/database_schema.md`: DB V5 구조와 관계
++- `docs/database_schema.md`: DB V5 기본 구조와 관계 (`sql/migration_v6.sql`에서 AWS 확장)
+ - `docs/asset_management.md`: 자산관리·스코프·마이그레이션 상세 절차
+ - `docs/day4_service_cve_mapping.md`: 서비스 식별·CVE 규칙·V4 적용·로컬 실습
++
++## 11. AWS VPC 보안 아키텍처 확장 (V6)
++
++기존 로컬/공인 IP 중심 실습에서 한 단계 확장해, AWS VPC 안에서 EC2 자산과 Security Group 구성을 읽기 전용으로 수집하고 승인된 private IP만 기존 스캐너로 진단할 수 있습니다.
++
++핵심 원칙:
++
++- AWS discovery != scan authorization
++- AWS Access Key/Secret Key를 저장소나 `.env`에 저장하지 않음
++- Scanner EC2는 IAM Instance Profile과 SSM Session Manager 사용
++- Target EC2는 public IP 없음
++- Target 8080은 Scanner Security Group에서만 허용
++- SG 과다노출은 `cloud_configuration_findings`에 저장하고 CVE와 분리
++- VPC Flow Logs는 네트워크 증적, CloudTrail Event History는 관리 API 증적으로 사용
++
++구조와 제약은 `docs/aws_architecture.md`, 실제 검증 순서는 `docs/aws_validation.md`를 참고합니다.
++
++### Terraform
++
++```powershell
++terraform -chdir=infra/aws/terraform init
++terraform -chdir=infra/aws/terraform validate
++terraform -chdir=infra/aws/terraform plan
++terraform -chdir=infra/aws/terraform apply
++```
++
++기본값은 `enable_demo_misconfiguration=false`입니다.
++
++### DB V6
++
++V5 적용 후:
++
++```powershell
++Get-Content -Raw -Encoding UTF8 .\sql\migration_v6.sql | docker exec -i portscan-mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root --default-character-set=utf8mb4 -D port_scan'
++Get-Content -Raw -Encoding UTF8 .\sql\verify_v6.sql | docker exec -i portscan-mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root --default-character-set=utf8mb4 -D port_scan'
++```
++
++환경에 맞는 MySQL 사용자/컨테이너 명령을 사용하고, 비밀번호를 shell history나 저장소에 남기지 않습니다.
++
++### AWS inventory / SG review
++
++먼저 DB write 없는 read-only preview:
++
++```powershell
++py -m scripts.aws_inventory --region ap-northeast-2 --vpc-id <VPC_ID>
++py -m scripts.aws_security_review --region ap-northeast-2 --vpc-id <VPC_ID>
++```
++
++V6 DB에 저장할 때만 `--save`를 붙입니다.
++
++```powershell
++py -m scripts.aws_inventory --region ap-northeast-2 --vpc-id <VPC_ID> --save
++py -m scripts.aws_security_review --region ap-northeast-2 --vpc-id <VPC_ID> --save
++```
++
++AWS API로 발견한 EC2는 자동 스캔하지 않습니다. 실제 진단은 기존 `ScopePolicy`를 통과해야 합니다.
++
++```powershell
++py -m scripts.run_scan scan `
++  --target <TARGET_PRIVATE_IP> `
++  --ports 22,8080 `
++  --scope-file .\config\scope.aws.example.json `
++  -sT -sV
++```
++
++V6 보고서는 CVE findings와 AWS configuration findings를 별도 항목으로 표시합니다. Security Group이 Internet-wide CIDR를 포함해도 라우팅/NACL/host firewall까지 계산하지 않으므로 실제 인터넷 도달성을 확정하지 않습니다.
+diff --git a/api/analysis_report.py b/api/analysis_report.py
+index c465b2a..8687458 100644
+--- a/api/analysis_report.py
++++ b/api/analysis_report.py
+@@ -1,4 +1,4 @@
+-"""Build one read-only, current-state V5 report snapshot and export it locally."""
++"""Build one read-only, current-state V6-capable report snapshot and export it locally."""
+ from __future__ import annotations
+ 
+ import hashlib
+@@ -32,6 +32,12 @@ ASSESSMENT_FIELDS = ("assessment_id", "vuln_id", "methodology_id", "methodology_
+                      "asset_criticality", "internet_exposed", "handles_personal_data", "input_sha256",
+                      "first_assessed_at", "last_assessed_at", "observations")
+ FINGERPRINT_FIELDS = ("service", "product", "version", "source", "confidence", "parser_version", "error")
++CLOUD_FIELDS = ("cloud_resource_id", "host_id", "provider", "account_id", "region", "resource_type",
++                "resource_id", "vpc_id", "subnet_id", "private_ip", "public_ip", "instance_state",
++                "first_discovered_at", "last_discovered_at")
++CLOUD_FINDING_FIELDS = ("cloud_finding_id", "cloud_resource_id", "rule_id", "category", "title", "severity",
++                        "priority", "status", "public_address_present", "remediation", "input_sha256",
++                        "first_detected_at", "last_detected_at", "resolved_at", "observations")
+ 
+ 
+ class ReportSelectionError(ValueError):
+@@ -100,6 +106,19 @@ def _pick(row, fields):
+     return {key: json_value(row.get(key)) for key in fields}
+ 
+ 
++def _array(value):
++    if value is None or value == "":
++        return [], "MISSING"
++    try:
++        if isinstance(value, (str, bytes)):
++            value = json.loads(value, parse_constant=lambda token: (_ for _ in ()).throw(ValueError(token)))
++        if not isinstance(value, list):
++            raise ValueError("Expected JSON array")
++        return json_value(value), "PARSED"
++    except (ValueError, TypeError, UnicodeError, RecursionError):
++        return [], "PARSE_ERROR"
++
++
+ def _select(cursor, sql, params=()):
+     cursor.execute(sql, tuple(params))
+     return cursor.fetchall()
+@@ -154,10 +173,28 @@ def _read_rows(conn, selection):
+                    v.first_detected_at, v.last_detected_at, v.verified_at, v.closed_at
+             FROM vulns AS v WHERE v.port_id IN
+         """, [row["port_id"] for row in ports], "AND v.source LIKE 'day4:%' ORDER BY v.id")
+-        return cursor_rows(cursor, assets, scans, ports, findings)
+-
+-
+-def cursor_rows(cursor, assets, scans, ports, findings):
++        cloud_resources, cloud_findings = [], []
++        cloud_host_ids = [row["id"] for row in assets if row.get("asset_type") == "CLOUD_RESOURCE"]
++        if cloud_host_ids:
++            cloud_resources = _related(cursor, """
++                SELECT cr.id AS cloud_resource_id, cr.host_id, cr.provider, cr.account_id, cr.region,
++                       cr.resource_type, cr.resource_id, cr.vpc_id, cr.subnet_id, cr.private_ip,
++                       cr.public_ip, cr.instance_state, cr.security_groups, cr.tags,
++                       cr.first_discovered_at, cr.last_discovered_at
++                FROM cloud_resources AS cr WHERE cr.host_id IN
++            """, cloud_host_ids, "ORDER BY cr.host_id, cr.id")
++            cloud_findings = _related(cursor, """
++                SELECT cf.id AS cloud_finding_id, cf.cloud_resource_id, cf.rule_id, cf.category,
++                       cf.title, cf.severity, cf.priority, cf.status, cf.public_address_present,
++                       cf.evidence, cf.remediation, cf.input_sha256, cf.first_detected_at,
++                       cf.last_detected_at, cf.resolved_at, cf.observations
++                FROM cloud_configuration_findings AS cf WHERE cf.cloud_resource_id IN
++            """, [row["cloud_resource_id"] for row in cloud_resources],
++            "AND cf.status = 'OPEN' ORDER BY cf.cloud_resource_id, cf.rule_id")
++        return cursor_rows(cursor, assets, scans, ports, findings, cloud_resources, cloud_findings)
++
++
++def cursor_rows(cursor, assets, scans, ports, findings, cloud_resources=None, cloud_findings=None):
+     try:
+         reviewed = {rule["id"]: rule["cve"] for rule in load_catalog()[0]["rules"]}
+     except (OSError, ValueError, KeyError) as exc:
+@@ -185,7 +222,7 @@ def cursor_rows(cursor, assets, scans, ports, findings):
+                rh.action_type, rh.reason, rh.changed_by, rh.changed_at
+         FROM remediation_history AS rh WHERE rh.vuln_id IN
+     """, ids, "ORDER BY rh.changed_at, rh.id")
+-    return assets, scans, ports, findings, assessments, evidence, history
++    return assets, scans, ports, findings, assessments, evidence, history, (cloud_resources or []), (cloud_findings or [])
+ 
+ 
+ def parse_evidence(row):
+@@ -269,13 +306,38 @@ def snapshot_sha256(snapshot):
+ 
+ 
+ def _assemble(selection, rows):
+-    assets, scans, ports, findings, assessments, evidence, history = rows
++    assets, scans, ports, findings, assessments, evidence, history, cloud_resources, cloud_findings = rows
+     by_asset = {}
+     for row in sorted(assets, key=lambda row: row["id"]):
+         item = _pick(row, ASSET_FIELDS)
+         for key in ("internet_exposed", "handles_personal_data"):
+             item[key] = _boolean(row.get(key))
+-        by_asset[row["id"]] = {**item, "ports": [], "findings": []}
++        by_asset[row["id"]] = {**item, "ports": [], "findings": [],
++                                "cloud": None, "cloud_configuration_findings": []}
++    cloud_by_id = {}
++    for row in cloud_resources:
++        item = _pick(row, CLOUD_FIELDS)
++        groups, groups_state = _array(row.get("security_groups"))
++        tags, tags_state = _object(row.get("tags"))
++        item["security_groups"] = groups
++        item["security_groups_status"] = groups_state
++        item["tags"] = tags if tags_state == "PARSED" else {}
++        item["tags_status"] = tags_state
++        cloud_by_id[item["cloud_resource_id"]] = item
++        if item["host_id"] in by_asset:
++            by_asset[item["host_id"]]["cloud"] = item
++    cloud_priority_counts = dict.fromkeys(PRIORITIES, 0)
++    for row in cloud_findings:
++        item = _pick(row, CLOUD_FINDING_FIELDS)
++        item["public_address_present"] = _boolean(row.get("public_address_present"))
++        evidence_doc, evidence_state = _object(row.get("evidence"))
++        item["evidence"] = evidence_doc if evidence_state == "PARSED" else {}
++        item["evidence_status"] = evidence_state
++        cloud = cloud_by_id.get(item["cloud_resource_id"])
++        if cloud and cloud["host_id"] in by_asset:
++            by_asset[cloud["host_id"]]["cloud_configuration_findings"].append(item)
++            if item.get("priority") in cloud_priority_counts:
++                cloud_priority_counts[item["priority"]] += 1
+     by_port = {}
+     for row in sorted(ports, key=lambda row: (row["host_id"], row["port"], row["protocol"], row["port_id"])):
+         item = _pick(row, PORT_FIELDS)
+@@ -291,9 +353,14 @@ def _assemble(selection, rows):
+         history_by.setdefault(row["vuln_id"], []).append(_pick(row, ("history_id", "from_status", "to_status",
+                                                         "action_type", "reason", "changed_by", "changed_at")))
+     summary = {"asset_count": len(by_asset), "open_port_count": sum(p["state"] == "open" for p in ports),
+-               "finding_count": len(findings), "status_counts": {status.value: 0 for status in VulnStatus},
+-               "priority_counts": dict.fromkeys(PRIORITIES, 0), "assessment_freshness_counts": dict.fromkeys(FRESHNESS, 0),
+-               "highest_priority": "UNASSESSED", "coverage_note": COVERAGE_NOTE, "freshness_note": FRESHNESS_NOTE}
++               "finding_count": len(findings), "cloud_configuration_finding_count": len(cloud_findings),
++               "status_counts": {status.value: 0 for status in VulnStatus},
++               "priority_counts": dict.fromkeys(PRIORITIES, 0),
++               "cloud_priority_counts": cloud_priority_counts,
++               "assessment_freshness_counts": dict.fromkeys(FRESHNESS, 0),
++               "highest_priority": "UNASSESSED",
++               "highest_cloud_priority": next((level for level in PRIORITIES if cloud_priority_counts[level]), "UNASSESSED"),
++               "coverage_note": COVERAGE_NOTE, "freshness_note": FRESHNESS_NOTE}
+     for row in findings:
+         item = _pick(row, FINDING_FIELDS)
+         port = by_port[item["port_id"]]
+@@ -326,7 +393,7 @@ def _assemble(selection, rows):
+             item.update(requested_targets=None, requested_targets_status="PARSE_ERROR")
+         item["scope"] = _pick(row, ("scope_uid", "authorization_ref", "approved_by", "valid_from", "valid_until", "policy_sha256"))
+         scan_documents.append(item)
+-    snapshot = {"schema_version": 1, "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
++    snapshot = {"schema_version": 2, "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                 "selection": selection, "summary": summary, "scans": scan_documents, "assets": list(by_asset.values()),
+                 "integrity": {"algorithm": "SHA-256", "digest_excludes": ["generated_at", "integrity.snapshot_sha256"]}}
+     snapshot["integrity"]["snapshot_sha256"] = snapshot_sha256(snapshot)
+diff --git a/api/report_pdf.py b/api/report_pdf.py
+index a49140a..6b795f9 100644
+--- a/api/report_pdf.py
++++ b/api/report_pdf.py
+@@ -101,6 +101,7 @@ def render_report_pdf(snapshot, output_path):
+     assets = snapshot.get("assets", [])
+     assets_by_uid = {asset.get("asset_uid"): asset for asset in assets}
+     findings = [finding for asset in assets for finding in asset.get("findings", [])]
++    cloud_findings = [finding for asset in assets for finding in asset.get("cloud_configuration_findings", [])]
+     priority_order = {value: rank for rank, value in enumerate(("P1", "P2", "P3", "P4", "UNASSESSED"))}
+     findings.sort(key=lambda finding: (priority_order.get(finding.get("effective_priority"), 4), finding["vuln_id"]))
+     summary = snapshot.get("summary", {})
+@@ -109,12 +110,13 @@ def render_report_pdf(snapshot, output_path):
+     story.append(Spacer(1, 8))
+     section(1, "Report Metadata")
+     fields([("generated_at_utc", snapshot.get("generated_at")), ("selection", snapshot.get("selection")),
+-            ("report_basis", "Read-only V5 DB snapshot. This command does not scan, verify or refresh external intelligence.")])
++            ("report_basis", "Read-only V6-capable DB snapshot. This command does not scan, verify or refresh external intelligence.")])
+ 
+     section(2, "Executive Summary")
+-    table(["Assets", "Open ports", "Findings", "Highest priority"],
++    table(["Assets", "Open ports", "CVE findings", "AWS config", "CVE highest"],
+           [[summary.get("asset_count"), summary.get("open_port_count"), summary.get("finding_count"),
+-            summary.get("highest_priority", "UNASSESSED")]], [0.18, 0.22, 0.22, 0.38])
++            summary.get("cloud_configuration_finding_count", 0), summary.get("highest_priority", "UNASSESSED")]],
++          [0.14, 0.16, 0.20, 0.20, 0.30])
+     story.append(p("Status counts", subheading))
+     statuses = list(summary.get("status_counts", {}).items())
+     status_rows = []
+@@ -123,7 +125,9 @@ def render_report_pdf(snapshot, output_path):
+         right = statuses[index + 1] if index + 1 < len(statuses) else ("N/A", None)
+         status_rows.append([left[0], left[1], right[0], right[1]])
+     table(["Status", "Count", "Status", "Count"], status_rows or [["N/A", 0, "N/A", 0]], [0.38, 0.12, 0.38, 0.12])
+-    for title_label, key in (("Effective priority counts", "priority_counts"), ("Assessment freshness", "assessment_freshness_counts")):
++    for title_label, key in (("CVE effective priority counts", "priority_counts"),
++                             ("AWS configuration priority counts", "cloud_priority_counts"),
++                             ("Assessment freshness", "assessment_freshness_counts")):
+         story.append(p(title_label, subheading))
+         counts = summary.get(key, {}) or {"N/A": 0}
+         table(list(counts), [list(counts.values())], [1 / len(counts)] * len(counts))
+@@ -149,7 +153,32 @@ def render_report_pdf(snapshot, output_path):
+                                                 "environment", "criticality", "owner", "business_unit", "data_classification",
+                                                 "handles_personal_data", "internet_exposed", "lifecycle_status", "first_seen", "last_seen"))
+ 
+-    section(5, "Open Ports")
++    section(5, "AWS Cloud Context / Configuration Findings")
++    cloud_assets = [asset for asset in assets if asset.get("cloud")]
++    if not cloud_assets:
++        story.append(p("N/A - no linked AWS cloud context for the selected assets."))
++    for asset in cloud_assets:
++        cloud = asset.get("cloud") or {}
++        story.append(p(asset.get("asset_name") or asset.get("asset_uid"), subheading))
++        fields((key, cloud.get(key)) for key in ("provider", "account_id", "region", "resource_type", "resource_id",
++                                                "vpc_id", "subnet_id", "private_ip", "public_ip", "instance_state",
++                                                "last_discovered_at"))
++        current = asset.get("cloud_configuration_findings", [])
++        if current:
++            table(["Rule", "Severity", "Priority", "Public IP", "Title"],
++                  [[f.get("rule_id"), f.get("severity"), f.get("priority"), f.get("public_address_present"), f.get("title")]
++                   for f in current], [0.16, 0.14, 0.14, 0.16, 0.40])
++            for finding in current:
++                story.append(p(f"{finding.get('rule_id')} evidence", subheading))
++                fields((key, finding.get(key)) for key in ("category", "status", "severity", "priority",
++                                                            "public_address_present", "first_detected_at",
++                                                            "last_detected_at", "observations", "remediation"))
++                fields([("evidence", finding.get("evidence")),
++                        ("reachability_note", "Security Group breadth and public-address presence are context only; end-to-end Internet reachability is not asserted.")])
++        else:
++            story.append(p("No OPEN AWS configuration findings stored for this cloud asset."))
++
++    section(6, "Open Ports")
+     open_rows = [[asset.get("host_ip"), f"{port.get('port')}/{port.get('protocol')}", port.get("service"),
+                   port.get("product"), port.get("version"), port.get("last_scan_id")]
+                  for asset in assets for port in asset.get("ports", []) if port.get("state") == "open"]
+@@ -160,7 +189,7 @@ def render_report_pdf(snapshot, output_path):
+         story.append(p("No current open port observations. This is not proof that all ports are closed or safe."))
+     story.append(p("Findings on currently observed closed/filtered endpoints retain their stored review status; port closure alone does not close a finding."))
+ 
+-    section(6, "Findings Summary")
++    section(7, "CVE Findings Summary")
+     if findings:
+         table(["CVE / ID", "Status", "Priority", "Action", "Freshness"],
+               [[f"{f.get('cve_id')} / {f['vuln_id']}", f.get("status"), f.get("effective_priority"),
+@@ -169,7 +198,7 @@ def render_report_pdf(snapshot, output_path):
+     else:
+         story.append(p("No stored reviewed findings for these current port observations; this does not establish security."))
+ 
+-    section(7, "Finding Details")
++    section(8, "CVE Finding Details")
+     for finding in findings:
+         story.append(p(f"{finding.get('cve_id')} / Finding {finding['vuln_id']}", subheading))
+         fields((key, finding.get(key)) for key in ("title", "source", "status", "severity", "effective_priority",
+@@ -187,7 +216,7 @@ def render_report_pdf(snapshot, output_path):
+     if not findings:
+         story.append(p("N/A"))
+ 
+-    section(8, "Verification Evidence")
++    section(9, "CVE Verification Evidence")
+     for finding in findings:
+         story.append(p(f"{finding.get('cve_id')} / Finding {finding['vuln_id']}", subheading))
+         if not finding.get("evidence"):
+@@ -198,7 +227,7 @@ def render_report_pdf(snapshot, output_path):
+     if not findings:
+         story.append(p("N/A"))
+ 
+-    section(9, "Remediation History")
++    section(10, "CVE Remediation History")
+     for finding in findings:
+         story.append(p(f"{finding.get('cve_id')} / Finding {finding['vuln_id']}", subheading))
+         if not finding.get("history"):
+@@ -208,7 +237,7 @@ def render_report_pdf(snapshot, output_path):
+     if not findings:
+         story.append(p("N/A"))
+ 
+-    section(10, "Risk Assessment / Provenance")
++    section(11, "CVE Risk Assessment / Provenance")
+     for finding in findings:
+         story.append(p(f"{finding.get('cve_id')} / Finding {finding['vuln_id']}", subheading))
+         if not finding.get("assessment"):
+@@ -226,7 +255,7 @@ def render_report_pdf(snapshot, output_path):
+     if not findings:
+         story.append(p("N/A"))
+ 
+-    section(11, "Report Integrity")
++    section(12, "Report Integrity")
+     fields([("snapshot_sha256", snapshot.get("integrity", {}).get("snapshot_sha256")),
+             ("digest_basis", "Canonical JSON with generated_at and integrity.snapshot_sha256 excluded."),
+             ("integrity_limit", "The hash identifies snapshot content. It is not a signature or proof of source authenticity.")])
+diff --git a/cloud_security/__init__.py b/cloud_security/__init__.py
+new file mode 100644
+index 0000000..02dd442
+--- /dev/null
++++ b/cloud_security/__init__.py
+@@ -0,0 +1,6 @@
++"""Read-only AWS inventory and cloud configuration review helpers."""
++
++from .aws_inventory import collect_inventory
++from .aws_sg_analyzer import analyze_security_groups
++
++__all__ = ["collect_inventory", "analyze_security_groups"]
+diff --git a/cloud_security/aws_inventory.py b/cloud_security/aws_inventory.py
+new file mode 100644
+index 0000000..cee1d99
+--- /dev/null
++++ b/cloud_security/aws_inventory.py
+@@ -0,0 +1,215 @@
++"""Read-only AWS EC2 inventory collection.
++
++The module is deliberately import-safe: boto3 is imported only when live AWS
++clients are requested. Tests can inject fake STS/EC2 clients without AWS
++credentials or network access.
++"""
++from __future__ import annotations
++
++import re
++from datetime import datetime, timezone
++from typing import Any, Iterable
++
++REGION_RE = re.compile(r"^[a-z]{2}(?:-gov)?-[a-z]+-\d+$")
++VPC_RE = re.compile(r"^vpc-[0-9a-fA-F]+$")
++
++
++class AwsInventoryError(RuntimeError):
++    """Raised when a live AWS inventory cannot be collected safely."""
++
++
++def validate_region(region: str) -> str:
++    if not isinstance(region, str) or not REGION_RE.fullmatch(region.strip()):
++        raise ValueError("AWS region 형식이 올바르지 않습니다.")
++    return region.strip()
++
++
++def validate_vpc_id(vpc_id: str | None) -> str | None:
++    if vpc_id is None:
++        return None
++    if not isinstance(vpc_id, str) or not VPC_RE.fullmatch(vpc_id.strip()):
++        raise ValueError("AWS VPC ID 형식이 올바르지 않습니다.")
++    return vpc_id.strip().lower()
++
++
++ALLOWED_TAG_KEYS = {"name", "environment", "owner", "businessunit", "data_classification"}
++
++
++def _safe_tags(tags: Iterable[dict[str, Any]] | None) -> dict[str, str]:
++    result: dict[str, str] = {}
++    for item in tags or []:
++        if not isinstance(item, dict):
++            continue
++        key, value = item.get("Key"), item.get("Value")
++        if not isinstance(key, str) or not isinstance(value, str):
++            continue
++        key = key.strip()
++        if key.casefold() not in ALLOWED_TAG_KEYS or len(value) > 256:
++            continue
++        result[key] = value.strip()
++    return result
++
++
++def _name_tag(tags: dict[str, str]) -> str | None:
++    value = tags.get("Name")
++    return value or None
++
++
++def _iter_instance_pages(ec2_client: Any, filters: list[dict[str, Any]]):
++    if hasattr(ec2_client, "get_paginator"):
++        paginator = ec2_client.get_paginator("describe_instances")
++        yield from paginator.paginate(Filters=filters)
++    else:
++        yield ec2_client.describe_instances(Filters=filters)
++
++
++def _chunked(values: list[str], size: int = 100):
++    for start in range(0, len(values), size):
++        yield values[start:start + size]
++
++
++def _fetch_security_groups(ec2_client: Any, group_ids: list[str]) -> dict[str, dict[str, Any]]:
++    groups: dict[str, dict[str, Any]] = {}
++    for batch in _chunked(sorted(set(group_ids))):
++        if not batch:
++            continue
++        response = ec2_client.describe_security_groups(GroupIds=batch)
++        for group in response.get("SecurityGroups", []):
++            group_id = group.get("GroupId")
++            if isinstance(group_id, str):
++                groups[group_id] = group
++    return groups
++
++
++def _normalize_permission(permission: dict[str, Any]) -> dict[str, Any]:
++    return {
++        "IpProtocol": permission.get("IpProtocol"),
++        "FromPort": permission.get("FromPort"),
++        "ToPort": permission.get("ToPort"),
++        "IpRanges": [
++            {"CidrIp": entry.get("CidrIp")} for entry in permission.get("IpRanges") or []
++            if isinstance(entry, dict) and isinstance(entry.get("CidrIp"), str)
++        ],
++        "Ipv6Ranges": [
++            {"CidrIpv6": entry.get("CidrIpv6")} for entry in permission.get("Ipv6Ranges") or []
++            if isinstance(entry, dict) and isinstance(entry.get("CidrIpv6"), str)
++        ],
++        "UserIdGroupPairs": [
++            {"GroupId": entry.get("GroupId")} for entry in permission.get("UserIdGroupPairs") or []
++            if isinstance(entry, dict) and isinstance(entry.get("GroupId"), str)
++        ],
++    }
++
++
++def _normalize_sg(group: dict[str, Any]) -> dict[str, Any]:
++    return {
++        "group_id": group.get("GroupId"),
++        "group_name": group.get("GroupName"),
++        "vpc_id": group.get("VpcId"),
++        "ip_permissions": [
++            _normalize_permission(permission) for permission in group.get("IpPermissions") or []
++            if isinstance(permission, dict)
++        ],
++    }
++
++
++def create_live_clients(region: str):
++    """Return live STS/EC2 clients without accepting static credentials."""
++    region = validate_region(region)
++    try:
++        import boto3  # lazy on purpose
++    except ImportError as exc:
++        raise AwsInventoryError(
++            "boto3가 설치되어 있지 않습니다. requirements.txt를 설치하세요."
++        ) from exc
++    session = boto3.session.Session(region_name=region)
++    return session.client("sts"), session.client("ec2")
++
++
++def collect_inventory(
++    *,
++    region: str,
++    vpc_id: str | None = None,
++    sts_client: Any | None = None,
++    ec2_client: Any | None = None,
++) -> dict[str, Any]:
++    """Collect EC2 + Security Group metadata using read-only AWS API calls.
++
++    No scan is triggered. The output intentionally excludes credentials,
++    user-data and arbitrary API response bodies.
++    """
++    region = validate_region(region)
++    vpc_id = validate_vpc_id(vpc_id)
++    if (sts_client is None) != (ec2_client is None):
++        raise ValueError("STS와 EC2 client는 둘 다 주입하거나 둘 다 생략해야 합니다.")
++    if sts_client is None:
++        sts_client, ec2_client = create_live_clients(region)
++
++    try:
++        identity = sts_client.get_caller_identity()
++        account_id = str(identity.get("Account") or "").strip()
++        if not account_id.isdigit() or len(account_id) != 12:
++            raise AwsInventoryError("AWS Account ID를 확인할 수 없습니다.")
++
++        filters = [{"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}]
++        if vpc_id:
++            filters.append({"Name": "vpc-id", "Values": [vpc_id]})
++
++        raw_instances: list[dict[str, Any]] = []
++        group_ids: list[str] = []
++        for page in _iter_instance_pages(ec2_client, filters):
++            for reservation in page.get("Reservations", []):
++                for instance in reservation.get("Instances", []):
++                    raw_instances.append(instance)
++                    for group in instance.get("SecurityGroups", []):
++                        group_id = group.get("GroupId")
++                        if isinstance(group_id, str):
++                            group_ids.append(group_id)
++        groups = _fetch_security_groups(ec2_client, group_ids)
++    except AwsInventoryError:
++        raise
++    except Exception as exc:
++        raise AwsInventoryError(
++            "AWS read-only inventory API 호출에 실패했습니다 "
++            f"({type(exc).__name__})."
++        ) from exc
++
++    resources: list[dict[str, Any]] = []
++    for instance in raw_instances:
++        private_ip = instance.get("PrivateIpAddress")
++        instance_id = instance.get("InstanceId")
++        instance_vpc = instance.get("VpcId")
++        if not all(isinstance(value, str) and value for value in (private_ip, instance_id, instance_vpc)):
++            # Current scanner inventory requires one primary private IP.
++            continue
++        tags = _safe_tags(instance.get("Tags"))
++        sg_items = []
++        for ref in instance.get("SecurityGroups", []):
++            group_id = ref.get("GroupId")
++            if group_id in groups:
++                sg_items.append(_normalize_sg(groups[group_id]))
++        sg_items.sort(key=lambda item: item.get("group_id") or "")
++        resources.append({
++            "provider": "AWS",
++            "account_id": account_id,
++            "region": region,
++            "resource_type": "EC2",
++            "resource_id": instance_id,
++            "asset_name": _name_tag(tags),
++            "vpc_id": instance_vpc,
++            "subnet_id": instance.get("SubnetId"),
++            "private_ip": private_ip,
++            "public_ip": instance.get("PublicIpAddress"),
++            "instance_state": (instance.get("State") or {}).get("Name"),
++            "security_groups": sg_items,
++            "tags": tags,
++        })
++    resources.sort(key=lambda item: (item["vpc_id"], item["private_ip"], item["resource_id"]))
++    return {
++        "provider": "AWS",
++        "account_id": account_id,
++        "region": region,
++        "vpc_id_filter": vpc_id,
++        "collected_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
++        "resources": resources,
++    }
+diff --git a/cloud_security/aws_sg_analyzer.py b/cloud_security/aws_sg_analyzer.py
+new file mode 100644
+index 0000000..496e9d2
+--- /dev/null
++++ b/cloud_security/aws_sg_analyzer.py
+@@ -0,0 +1,166 @@
++"""Pure AWS Security Group configuration checks for the portfolio lab.
++
++These checks identify overly broad ingress rules. They do not prove end-to-end
++Internet reachability because route tables, IGWs, NACLs and host firewalls are
++outside this analyzer's current scope.
++"""
++from __future__ import annotations
++
++import hashlib
++import json
++from typing import Any
++
++SENSITIVE_RULES = (
++    ("AWS-SG-001", 22, "Security Group allows Internet-wide SSH ingress"),
++    ("AWS-SG-002", 3389, "Security Group allows Internet-wide RDP ingress"),
++    ("AWS-SG-003", 3306, "Security Group allows Internet-wide MySQL ingress"),
++    ("AWS-SG-004", 5432, "Security Group allows Internet-wide PostgreSQL ingress"),
++    ("AWS-SG-005", 27017, "Security Group allows Internet-wide MongoDB ingress"),
++)
++BROAD_V4 = "0.0.0.0/0"
++BROAD_V6 = "::/0"
++
++
++def _broad_sources(permission: dict[str, Any]) -> list[str]:
++    sources: set[str] = set()
++    for entry in permission.get("IpRanges") or []:
++        cidr = entry.get("CidrIp") if isinstance(entry, dict) else None
++        if cidr == BROAD_V4:
++            sources.add(cidr)
++    for entry in permission.get("Ipv6Ranges") or []:
++        cidr = entry.get("CidrIpv6") if isinstance(entry, dict) else None
++        if cidr == BROAD_V6:
++            sources.add(cidr)
++    return sorted(sources)
++
++
++def _covers_port(permission: dict[str, Any], port: int) -> bool:
++    protocol = str(permission.get("IpProtocol", "")).lower()
++    if protocol == "-1":
++        return True
++    if protocol not in {"tcp", "6"}:
++        return False
++    try:
++        return int(permission.get("FromPort")) <= port <= int(permission.get("ToPort"))
++    except (TypeError, ValueError):
++        return False
++
++
++def _is_all_ports(permission: dict[str, Any]) -> bool:
++    protocol = str(permission.get("IpProtocol", "")).lower()
++    if protocol == "-1":
++        return True
++    if protocol not in {"tcp", "6", "udp", "17"}:
++        return False
++    try:
++        return int(permission.get("FromPort")) <= 0 and int(permission.get("ToPort")) >= 65535
++    except (TypeError, ValueError):
++        return False
++
++
++def _priority(severity: str, public_address_present: bool) -> str:
++    if severity == "CRITICAL":
++        return "P1" if public_address_present else "P2"
++    return "P2" if public_address_present else "P3"
++
++
++def _finding(resource: dict[str, Any], rule_id: str, title: str, severity: str, matches: list[dict[str, Any]]):
++    public_address_present = bool(resource.get("public_ip"))
++    evidence = {
++        "resource_id": resource.get("resource_id"),
++        "vpc_id": resource.get("vpc_id"),
++        "private_ip": resource.get("private_ip"),
++        "public_address_present": public_address_present,
++        "matched_permissions": sorted(
++            matches,
++            key=lambda item: (
++                item.get("security_group_id") or "",
++                item.get("protocol") or "",
++                item.get("from_port") if item.get("from_port") is not None else -1,
++                ",".join(item.get("sources") or []),
++            ),
++        ),
++        "reachability_limit": (
++            "Broad Security Group ingress was observed. Public IP presence is only a context signal; "
++            "route tables, Internet Gateway, NACLs and host firewall were not evaluated."
++        ),
++    }
++    canonical = json.dumps(evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
++    return {
++        "rule_id": rule_id,
++        "category": "NETWORK_EXPOSURE",
++        "title": title,
++        "severity": severity,
++        "priority": _priority(severity, public_address_present),
++        "public_address_present": public_address_present,
++        "evidence": evidence,
++        "remediation": (
++            "Remove Internet-wide ingress unless explicitly required. Prefer a trusted CIDR, "
++            "Security Group reference, VPN/private path, or Systems Manager for administration."
++        ),
++        "input_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
++    }
++
++
++def analyze_resource(resource: dict[str, Any]) -> list[dict[str, Any]]:
++    all_permissions: list[tuple[str, dict[str, Any], list[str]]] = []
++    for group in resource.get("security_groups") or []:
++        if not isinstance(group, dict):
++            continue
++        group_id = group.get("group_id")
++        for permission in group.get("ip_permissions") or []:
++            if not isinstance(permission, dict):
++                continue
++            sources = _broad_sources(permission)
++            if sources:
++                all_permissions.append((group_id, permission, sources))
++
++    all_port_matches = []
++    for group_id, permission, sources in all_permissions:
++        if _is_all_ports(permission):
++            all_port_matches.append({
++                "security_group_id": group_id,
++                "protocol": permission.get("IpProtocol"),
++                "from_port": permission.get("FromPort"),
++                "to_port": permission.get("ToPort"),
++                "sources": sources,
++            })
++    if all_port_matches:
++        return [_finding(
++            resource,
++            "AWS-SG-006",
++            "Security Group allows Internet-wide all ports/protocols",
++            "CRITICAL",
++            all_port_matches,
++        )]
++
++    findings = []
++    for rule_id, port, title in SENSITIVE_RULES:
++        matches = []
++        for group_id, permission, sources in all_permissions:
++            if _covers_port(permission, port):
++                matches.append({
++                    "security_group_id": group_id,
++                    "protocol": permission.get("IpProtocol"),
++                    "from_port": permission.get("FromPort"),
++                    "to_port": permission.get("ToPort"),
++                    "sources": sources,
++                })
++        if matches:
++            findings.append(_finding(resource, rule_id, title, "HIGH", matches))
++    return findings
++
++
++def analyze_security_groups(inventory: dict[str, Any]) -> list[dict[str, Any]]:
++    findings: list[dict[str, Any]] = []
++    for resource in inventory.get("resources") or []:
++        if not isinstance(resource, dict):
++            continue
++        for finding in analyze_resource(resource):
++            findings.append({
++                "resource_id": resource.get("resource_id"),
++                "private_ip": resource.get("private_ip"),
++                **finding,
++            })
++    findings.sort(key=lambda item: (item.get("resource_id") or "", item["rule_id"]))
++    return findings
+diff --git a/config/scope.aws.example.json b/config/scope.aws.example.json
+new file mode 100644
+index 0000000..165b28f
+--- /dev/null
++++ b/config/scope.aws.example.json
+@@ -0,0 +1,12 @@
++{
++  "scope_uid": "aws-lab-v1",
++  "name": "AWS private target lab",
++  "authorization_ref": "SELF-OWNED-AWS-LAB",
++  "approved_by": "lab-owner",
++  "valid_from": "2026-01-01T00:00:00+00:00",
++  "valid_until": "2027-01-01T00:00:00+00:00",
++  "allowed_targets": ["10.20.2.0/24"],
++  "max_targets": 16,
++  "max_workers": 100,
++  "max_ports_per_target": 1024
++}
+diff --git a/db/cloud_repository.py b/db/cloud_repository.py
+new file mode 100644
+index 0000000..902e577
+--- /dev/null
++++ b/db/cloud_repository.py
+@@ -0,0 +1,196 @@
++"""Persistence for AWS cloud context and configuration findings.
++
++The repository accepts an existing transaction/connection and never commits on
++its own. It intentionally has no mysql-connector import so pure unit tests can
++use a fake DB connection.
++"""
++from __future__ import annotations
++
++import json
++from datetime import datetime, timezone
++from typing import Any
++from uuid import uuid4
++
++from asset_management import normalize_ip_address
++
++
++def _utc_naive_now() -> datetime:
++    return datetime.now(timezone.utc).replace(tzinfo=None)
++
++
++def _json(value: Any) -> str:
++    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
++
++
++def upsert_cloud_resource(conn: Any, resource: dict[str, Any]) -> dict[str, int]:
++    required = ("account_id", "region", "resource_id", "vpc_id", "private_ip")
++    missing = [key for key in required if not resource.get(key)]
++    if missing:
++        raise ValueError("AWS 자산 필수 필드가 없습니다: " + ", ".join(missing))
++    private_ip = normalize_ip_address(resource["private_ip"])
++    now = _utc_naive_now()
++    asset_uid = str(uuid4())
++
++    with conn.cursor() as cursor:
++        cursor.execute(
++            """
++            INSERT INTO hosts (
++                asset_uid, host_ip, asset_name, asset_type, internet_exposed,
++                source, first_seen, last_seen
++            ) VALUES (%s, %s, %s, 'CLOUD_RESOURCE', %s, 'IMPORTED', %s, %s)
++            ON DUPLICATE KEY UPDATE
++                id = LAST_INSERT_ID(id),
++                asset_name = COALESCE(VALUES(asset_name), asset_name),
++                asset_type = 'CLOUD_RESOURCE',
++                internet_exposed = VALUES(internet_exposed),
++                last_seen = VALUES(last_seen);
++            """,
++            (
++                asset_uid,
++                private_ip,
++                resource.get("asset_name"),
++                bool(resource.get("public_ip")),
++                now,
++                now,
++            ),
++        )
++        host_id = cursor.lastrowid
++        cursor.execute(
++            """
++            INSERT INTO cloud_resources (
++                host_id, provider, account_id, region, resource_type, resource_id,
++                vpc_id, subnet_id, private_ip, public_ip, instance_state,
++                security_groups, tags, first_discovered_at, last_discovered_at
++            ) VALUES (
++                %s, 'AWS', %s, %s, 'EC2', %s,
++                %s, %s, %s, %s, %s, %s, %s, %s, %s
++            )
++            ON DUPLICATE KEY UPDATE
++                id = LAST_INSERT_ID(id),
++                host_id = VALUES(host_id),
++                vpc_id = VALUES(vpc_id),
++                subnet_id = VALUES(subnet_id),
++                private_ip = VALUES(private_ip),
++                public_ip = VALUES(public_ip),
++                instance_state = VALUES(instance_state),
++                security_groups = VALUES(security_groups),
++                tags = VALUES(tags),
++                last_discovered_at = VALUES(last_discovered_at);
++            """,
++            (
++                host_id,
++                resource["account_id"],
++                resource["region"],
++                resource["resource_id"],
++                resource["vpc_id"],
++                resource.get("subnet_id"),
++                private_ip,
++                resource.get("public_ip"),
++                resource.get("instance_state"),
++                _json(resource.get("security_groups") or []),
++                _json(resource.get("tags") or {}),
++                now,
++                now,
++            ),
++        )
++        cloud_resource_id = cursor.lastrowid
++    return {"host_id": host_id, "cloud_resource_id": cloud_resource_id}
++
++
++def save_inventory(conn: Any, inventory: dict[str, Any]) -> dict[str, dict[str, int]]:
++    vpc_filter = inventory.get("vpc_id_filter")
++    if not vpc_filter:
++        raise ValueError("Cloud inventory 저장에는 단일 vpc_id_filter가 필요합니다.")
++    mapping: dict[str, dict[str, int]] = {}
++    for resource in inventory.get("resources") or []:
++        if resource.get("vpc_id") != vpc_filter:
++            raise ValueError("Inventory resource가 승인된 단일 VPC filter와 일치하지 않습니다.")
++        if not resource.get("private_ip"):
++            continue
++        enriched = {
++            **resource,
++            "account_id": inventory.get("account_id"),
++            "region": inventory.get("region"),
++        }
++        ids = upsert_cloud_resource(conn, enriched)
++        mapping[resource["resource_id"]] = ids
++    return mapping
++
++
++def sync_configuration_findings(
++    conn: Any,
++    resource_mapping: dict[str, dict[str, int]],
++    findings: list[dict[str, Any]],
++) -> int:
++    now = _utc_naive_now()
++    observed: dict[int, set[str]] = {}
++    written = 0
++    with conn.cursor() as cursor:
++        for finding in findings:
++            resource_id = finding.get("resource_id")
++            ids = resource_mapping.get(resource_id)
++            if not ids:
++                continue
++            cloud_id = ids["cloud_resource_id"]
++            observed.setdefault(cloud_id, set()).add(finding["rule_id"])
++            cursor.execute(
++                """
++                INSERT INTO cloud_configuration_findings (
++                    cloud_resource_id, rule_id, category, title, severity,
++                    priority, status, public_address_present, evidence,
++                    remediation, input_sha256, first_detected_at,
++                    last_detected_at, resolved_at, observations
++                ) VALUES (
++                    %s, %s, %s, %s, %s,
++                    %s, 'OPEN', %s, %s,
++                    %s, %s, %s, %s, NULL, 1
++                )
++                ON DUPLICATE KEY UPDATE
++                    category = VALUES(category),
++                    title = VALUES(title),
++                    severity = VALUES(severity),
++                    priority = VALUES(priority),
++                    status = 'OPEN',
++                    public_address_present = VALUES(public_address_present),
++                    evidence = VALUES(evidence),
++                    remediation = VALUES(remediation),
++                    input_sha256 = VALUES(input_sha256),
++                    last_detected_at = VALUES(last_detected_at),
++                    resolved_at = NULL,
++                    observations = observations + 1;
++                """,
++                (
++                    cloud_id,
++                    finding["rule_id"],
++                    finding["category"],
++                    finding["title"],
++                    finding["severity"],
++                    finding["priority"],
++                    bool(finding.get("public_address_present")),
++                    _json(finding.get("evidence") or {}),
++                    finding["remediation"],
++                    finding["input_sha256"],
++                    now,
++                    now,
++                ),
++            )
++            written += 1
++
++        # Only resources reviewed in this run are eligible for automatic resolve.
++        for ids in resource_mapping.values():
++            cloud_id = ids["cloud_resource_id"]
++            current_rule_ids = sorted(observed.get(cloud_id, set()))
++            if current_rule_ids:
++                placeholders = ",".join(["%s"] * len(current_rule_ids))
++                cursor.execute(
++                    "UPDATE cloud_configuration_findings SET status='RESOLVED', resolved_at=%s "
++                    "WHERE cloud_resource_id=%s AND status='OPEN' AND rule_id NOT IN (" + placeholders + ");",
++                    (now, cloud_id, *current_rule_ids),
++                )
++            else:
++                cursor.execute(
++                    "UPDATE cloud_configuration_findings SET status='RESOLVED', resolved_at=%s "
++                    "WHERE cloud_resource_id=%s AND status='OPEN';",
++                    (now, cloud_id),
++                )
++    return written
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 6c1f4dd..df665b4 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -316,3 +316,17 @@ Nuclei 결과 하나만으로 자동 `CONFIRMED`를 만드는 구조가 아니
+ - [서비스 식별과 CVE 후보](day4_service_cve_mapping.md)
+ - [검증 기록](validation.md)
+ - [포트폴리오·면접 스토리](project_story.md)
++
++## AWS V6 extension
++
++The cloud extension is an adapter around the existing scan pipeline, not a replacement scanner.
++
++```text
++AWS read-only API
++  ├─ EC2 inventory ──> hosts + cloud_resources
++  └─ Security Groups ──> cloud_configuration_findings
++
++approved ScopePolicy ──> existing private-IP scanner ──> CVE pipeline
++```
++
++CVE findings and AWS configuration findings remain separate data types. AWS discovery never triggers a scan automatically. See `docs/aws_architecture.md` for network/IAM design and `docs/aws_validation.md` for the lab runbook.
+diff --git a/docs/aws_architecture.md b/docs/aws_architecture.md
+new file mode 100644
+index 0000000..34e9682
+--- /dev/null
++++ b/docs/aws_architecture.md
+@@ -0,0 +1,55 @@
++# AWS Security Lab Architecture
++
++## Purpose
++
++This lab extends the existing approved-scope infrastructure scanner to an AWS VPC without turning AWS discovery into automatic scanning. The AWS layer proves cloud-architecture understanding while preserving the existing scan authorization gate.
++
++## Architecture
++
++```text
++AWS VPC 10.20.0.0/16
++├─ Scanner subnet 10.20.1.0/24
++│  └─ Scanner EC2
++│     ├─ no inbound Security Group rules
++│     ├─ SSM Session Manager administration
++│     ├─ IAM instance profile
++│     └─ Python scanner / boto3 read-only inventory
++└─ Target subnet 10.20.2.0/24
++   └─ Target EC2
++      ├─ no public IPv4 address
++      └─ TCP/8080 allowed only from Scanner SG
++
++VPC Flow Logs -> CloudWatch Logs
++CloudTrail Event History -> management-event evidence (no dedicated trail required by this lab)
++```
++
++## Security decisions
++
++- No AWS access key or secret key is stored in the repository or `.env`. Live AWS calls use the EC2 instance role or the operator's standard AWS credential chain.
++- Scanner administration uses Systems Manager Session Manager. No inbound SSH rule is created for the scanner.
++- The target receives no public IP and has no default Internet route.
++- Target TCP/8080 uses a Security Group reference to the scanner Security Group rather than a hard-coded source IP.
++- `enable_demo_misconfiguration=false` by default. When explicitly enabled, an Internet-wide TCP/22 rule is added only to demonstrate the configuration analyzer; the target still has no public IP.
++- VPC Flow Logs are short-lived lab evidence. `terraform destroy` is part of the validation/cleanup procedure.
++
++## Inventory vs scan authorization
++
++AWS discovery is **not** scan authorization.
++
++```text
++DescribeInstances / DescribeSecurityGroups
++            ↓
++      cloud asset inventory
++            ↓
++      approved ScopePolicy
++            ↓
++      private-IP port scan
++```
++
++`config/scope.aws.example.json` authorizes only the dedicated target subnet. A newly discovered EC2 instance is not scanned unless the operator explicitly invokes the scanner with an approved target/scope.
++
++## Current limitations
++
++- V6 is intentionally scoped to one AWS account/region/VPC lab at a time when persisting assets. The pre-existing `hosts.host_ip` unique key is IP-centric and cannot safely distinguish overlapping RFC1918 addresses across different VPCs/accounts.
++- The Security Group analyzer evaluates ingress configuration and whether an instance has a public IP. It does **not** prove Internet reachability; route tables, IGWs, NACLs and host firewall state are not calculated as a reachability graph.
++- Only EC2 and Security Groups are inventoried. RDS, EKS, ELB, IAM posture, GuardDuty/Security Hub findings and organization-level controls are out of scope.
+diff --git a/docs/aws_validation.md b/docs/aws_validation.md
+new file mode 100644
+index 0000000..7500043
+--- /dev/null
++++ b/docs/aws_validation.md
+@@ -0,0 +1,85 @@
++# AWS Lab Validation Runbook
++
++This runbook is for a user-owned AWS account and the dedicated Terraform lab only.
++
++## 1. Static checks
++
++```powershell
++terraform -chdir=infra/aws/terraform fmt -check -recursive
++terraform -chdir=infra/aws/terraform init
++terraform -chdir=infra/aws/terraform validate
++terraform -chdir=infra/aws/terraform plan
++```
++
++Do not use `enable_demo_misconfiguration=true` until the normal architecture is validated.
++
++## 2. Apply and capture outputs
++
++```powershell
++terraform -chdir=infra/aws/terraform apply
++terraform -chdir=infra/aws/terraform output
++```
++
++Record only non-secret resource identifiers needed for the portfolio: VPC ID, instance IDs, private IPs and Security Group ID.
++
++## 3. Database V6
++
++Apply `sql/migration_v6.sql` after V5 and verify with `sql/verify_v6.sql`.
++
++## 4. Read-only AWS inventory
++
++First run without DB writes:
++
++```powershell
++python -m scripts.aws_inventory --region ap-northeast-2 --vpc-id <vpc-id>
++python -m scripts.aws_security_review --region ap-northeast-2 --vpc-id <vpc-id>
++```
++
++Then persist only the dedicated VPC:
++
++```powershell
++python -m scripts.aws_inventory --region ap-northeast-2 --vpc-id <vpc-id> --save
++python -m scripts.aws_security_review --region ap-northeast-2 --vpc-id <vpc-id> --save
++```
++
++## 5. Approved private-IP scan
++
++On the scanner EC2, use `config/scope.aws.example.json` and the Terraform `target_private_ip` output:
++
++```powershell
++python -m scripts.run_scan scan --target <target-private-ip> --ports 22,8080 --scope-file config/scope.aws.example.json -sT -sV
++```
++
++Expected normal-lab result: TCP/8080 open; TCP/22 is not required to be open merely because a Security Group rule exists.
++
++## 6. Optional configuration-finding demonstration
++
++Set `enable_demo_misconfiguration=true`, apply, and rerun `aws_security_review`. Expected finding:
++
++- `AWS-SG-001`: Internet-wide SSH ingress
++- target has no public IPv4, so the report must **not** claim proven Internet reachability
++
++Return the variable to `false` and apply again. Rerunning the review should mark the stored rule `RESOLVED`.
++
++## 7. Evidence
++
++Useful screenshots/evidence:
++
++- VPC/subnet diagram or resource map
++- Scanner SG with no inbound rules
++- Target SG using Scanner SG as source for 8080
++- EC2 inventory CLI output
++- AWS configuration finding output
++- approved private-IP scan result
++- VPC Flow Log entry showing scanner-private-IP -> target-private-IP:8080 ACCEPT
++- CloudTrail Event History for Terraform-created/updated resources
++
++Do not expose AWS credentials, session tokens, account secrets or unrelated resource data.
++
++## 8. Cleanup
++
++```powershell
++terraform -chdir=infra/aws/terraform destroy
++```
++
++Confirm that lab EC2 instances, Flow Log, CloudWatch log group, VPC and related IAM lab roles were removed.
+diff --git a/docs/database_schema.md b/docs/database_schema.md
+index eef4b82..dacec94 100644
+--- a/docs/database_schema.md
++++ b/docs/database_schema.md
+@@ -380,3 +380,29 @@ CURRENT는 source API를 새로 조회했다는 뜻이 아니다.
+ 
+ JSON snapshot의 SHA-256에서는 generated_at과 hash 자체를 제외한다.
+ 이 값은 내용 동일성 확인용이며 전자서명이나 DB 원본의 진위를 증명하는 값은 아니다.
++
++## V6 AWS cloud extension
++
++V6 keeps the existing `hosts` table as the scanner's primary asset identity and adds two AWS-specific tables.
++
++```text
++hosts
++  1 ─── 0..1 cloud_resources
++              1 ─── 0..N cloud_configuration_findings
++```
++
++### cloud_resources
++
++Stores normalized EC2 context for a `CLOUD_RESOURCE` host: AWS account, region, instance ID, VPC/subnet, primary private/public IP, instance state, Security Group snapshot and sanitized tags.
++
++`UNIQUE(provider, account_id, region, resource_id)` prevents duplicate EC2 identities and `UNIQUE(host_id)` keeps one current cloud context per host.
++
++### cloud_configuration_findings
++
++Stores AWS configuration findings separately from `vulns` so a Security Group exposure is never represented as a CVE. Current V6 rules focus on Internet-wide SSH/RDP/database ingress and all-port/all-protocol ingress.
++
++A repeated rule updates the same row and increments `observations`. A later review that no longer sees the rule sets `status=RESOLVED` and `resolved_at`.
++
++### Scope limitation
++
++The pre-existing `hosts.host_ip` uniqueness is IP-centric. V6 therefore persists one VPC at a time (`--vpc-id` required with `--save`) and does not claim multi-account/overlapping-RFC1918 asset identity support.
+diff --git a/docs/project_story.md b/docs/project_story.md
+index 8435edc..95d6413 100644
+--- a/docs/project_story.md
++++ b/docs/project_story.md
+@@ -434,3 +434,42 @@ Nuclei 결과 하나로 자동 CONFIRMED하지 않는다.
+ 
+ 이 질문들에 코드 전체를 외우지 않고도
+ `문제 → 판단 → 구현 → 검증 → 한계` 순서로 답할 수 있으면 된다.
++
++## 12. AWS 보안 아키텍처 확장
++
++초기 프로젝트에서는 AWS EC2 공인 IP를 직접 실습 대상으로 사용한 경험이 있었지만, 그 자체만으로는 클라우드 보안 아키텍처 이해를 충분히 설명하기 어려웠습니다. 그래서 최종 확장에서는 단순히 EC2에서 스캐너를 실행하는 것이 아니라 아래 구조로 재설계했습니다.
++
++```text
++AWS VPC
++├─ Scanner EC2
++│  ├─ inbound 관리 포트 없음
++│  ├─ SSM Session Manager
++│  └─ IAM Role 기반 read-only AWS inventory
++└─ Target EC2
++   ├─ public IP 없음
++   └─ Scanner Security Group에서만 8080 허용
++
++AWS API -> Asset Inventory -> Approved Scope -> Private-IP Scan
++                         └-> Security Group Configuration Review
++```
++
++추가한 내용:
++
++- Terraform으로 VPC/Subnet/Route/EC2/SG/IAM/Flow Logs 재현
++- boto3 `DescribeInstances`, `DescribeSecurityGroups`, `GetCallerIdentity` 기반 read-only inventory
++- AWS EC2 context를 기존 `hosts`와 V6 `cloud_resources`에 연결
++- SSH/RDP/DB 포트의 `0.0.0.0/0`, `::/0` 과다 허용을 CVE가 아닌 `CONFIGURATION` finding으로 분리
++- public IP 존재 여부는 우선순위 문맥으로만 사용하고, 실제 인터넷 도달성을 과장하지 않음
++- 새로 발견한 EC2를 자동 스캔하지 않고 기존 승인 Scope를 계속 적용
++- Flow Logs와 CloudTrail Event History를 실행 증적으로 사용하고 실습 후 Terraform destroy
++
++면접에서는 다음처럼 설명합니다.
++
++> 과거에는 EC2 공인 IP를 직접 대상으로 사용했지만, 개선 과정에서는 클라우드 자산 발견과 스캔 권한을 분리했습니다. VPC 내부 Scanner/Target을 분리하고 Target은 private IP만 사용했으며, Scanner는 SSM과 Instance Role을 사용했습니다. AWS API로 EC2와 Security Group을 읽기 전용 수집한 뒤 기존 승인 Scope를 통과한 자산만 포트 진단하도록 했고, CVE와 Security Group 설정 위험도 별도 finding으로 관리했습니다.
++
++### AWS 확장 한계
++
++- AWS 전체 CSPM 제품이 아니다.
++- EC2/SG만 다루며 IAM posture, RDS/EKS, Organizations, GuardDuty/Security Hub는 범위 밖이다.
++- `hosts.host_ip`가 unique이므로 overlapping CIDR을 가진 다중 VPC/다중 계정 통합 자산관리는 이번 V6 범위가 아니다.
++- SG의 broad ingress와 public IP는 위험 신호이지 end-to-end Internet reachability 증명이 아니다.
+diff --git a/infra/aws/terraform/ec2.tf b/infra/aws/terraform/ec2.tf
+new file mode 100644
+index 0000000..00fe7ee
+--- /dev/null
++++ b/infra/aws/terraform/ec2.tf
+@@ -0,0 +1,51 @@
++resource "aws_instance" "scanner" {
++  ami                         = data.aws_ssm_parameter.al2023_ami.value
++  instance_type               = var.instance_type
++  subnet_id                   = aws_subnet.scanner.id
++  vpc_security_group_ids      = [aws_security_group.scanner.id]
++  associate_public_ip_address = true
++  iam_instance_profile        = aws_iam_instance_profile.scanner.name
++  metadata_options {
++    http_endpoint = "enabled"
++    http_tokens   = "required"
++  }
++  root_block_device {
++    encrypted   = true
++    volume_type = "gp3"
++  }
++  tags = { Name = "portscan-scanner" }
++}
++
++resource "aws_instance" "target" {
++  ami                         = data.aws_ssm_parameter.al2023_ami.value
++  instance_type               = var.instance_type
++  subnet_id                   = aws_subnet.target.id
++  vpc_security_group_ids      = [aws_security_group.target.id]
++  associate_public_ip_address = false
++  metadata_options {
++    http_endpoint = "enabled"
++    http_tokens   = "required"
++  }
++  root_block_device {
++    encrypted   = true
++    volume_type = "gp3"
++  }
++  user_data = <<-EOF
++    #!/bin/bash
++    cat >/etc/systemd/system/portscan-demo.service <<'UNIT'
++    [Unit]
++    Description=Authorized port scanner demo HTTP service
++    After=network.target
++    [Service]
++    ExecStart=/usr/bin/python3 -m http.server 8080 --bind 0.0.0.0 --directory /var/tmp
++    Restart=always
++    User=nobody
++    [Install]
++    WantedBy=multi-user.target
++    UNIT
++    echo 'Authorized AWS port scanner lab' >/var/tmp/index.html
++    systemctl daemon-reload
++    systemctl enable --now portscan-demo.service
++  EOF
++  tags = { Name = "portscan-target" }
++}
+diff --git a/infra/aws/terraform/flow_logs.tf b/infra/aws/terraform/flow_logs.tf
+new file mode 100644
+index 0000000..b74232d
+--- /dev/null
++++ b/infra/aws/terraform/flow_logs.tf
+@@ -0,0 +1,43 @@
++resource "aws_cloudwatch_log_group" "flow" {
++  name              = "/portscan-lab/vpc-flow"
++  retention_in_days = var.flow_log_retention_days
++}
++
++resource "aws_iam_role" "flow" {
++  name               = "portscan-lab-flowlog-role"
++  assume_role_policy = jsonencode({
++    Version = "2012-10-17"
++    Statement = [{
++      Effect = "Allow"
++      Principal = { Service = "vpc-flow-logs.amazonaws.com" }
++      Action = "sts:AssumeRole"
++    }]
++  })
++}
++
++resource "aws_iam_role_policy" "flow" {
++  name = "portscan-lab-flowlog-policy"
++  role = aws_iam_role.flow.id
++  policy = jsonencode({
++    Version = "2012-10-17"
++    Statement = [{
++      Effect = "Allow"
++      Action = [
++        "logs:CreateLogGroup",
++        "logs:CreateLogStream",
++        "logs:PutLogEvents",
++        "logs:DescribeLogGroups",
++        "logs:DescribeLogStreams"
++      ]
++      Resource = "*"
++    }]
++  })
++}
++
++resource "aws_flow_log" "lab" {
++  depends_on      = [aws_iam_role_policy.flow]
++  iam_role_arn    = aws_iam_role.flow.arn
++  log_destination = aws_cloudwatch_log_group.flow.arn
++  traffic_type    = "ALL"
++  vpc_id          = aws_vpc.lab.id
++}
+diff --git a/infra/aws/terraform/iam.tf b/infra/aws/terraform/iam.tf
+new file mode 100644
+index 0000000..f4b107b
+--- /dev/null
++++ b/infra/aws/terraform/iam.tf
+@@ -0,0 +1,47 @@
++data "aws_iam_policy_document" "ec2_assume" {
++  statement {
++    actions = ["sts:AssumeRole"]
++    principals {
++      type        = "Service"
++      identifiers = ["ec2.amazonaws.com"]
++    }
++  }
++}
++
++resource "aws_iam_role" "scanner" {
++  name               = "portscan-lab-scanner-role"
++  assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
++}
++
++resource "aws_iam_role_policy_attachment" "scanner_ssm" {
++  role       = aws_iam_role.scanner.name
++  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
++}
++
++data "aws_iam_policy_document" "scanner_inventory" {
++  statement {
++    sid = "ReadOnlyInventory"
++    actions = [
++      "ec2:DescribeInstances",
++      "ec2:DescribeNetworkInterfaces",
++      "ec2:DescribeSecurityGroups"
++    ]
++    resources = ["*"]
++  }
++  statement {
++    sid       = "CallerIdentity"
++    actions   = ["sts:GetCallerIdentity"]
++    resources = ["*"]
++  }
++}
++
++resource "aws_iam_role_policy" "scanner_inventory" {
++  name   = "portscan-readonly-inventory"
++  role   = aws_iam_role.scanner.id
++  policy = data.aws_iam_policy_document.scanner_inventory.json
++}
++
++resource "aws_iam_instance_profile" "scanner" {
++  name = "portscan-lab-scanner-profile"
++  role = aws_iam_role.scanner.name
++}
+diff --git a/infra/aws/terraform/network.tf b/infra/aws/terraform/network.tf
+new file mode 100644
+index 0000000..ffc30c1
+--- /dev/null
++++ b/infra/aws/terraform/network.tf
+@@ -0,0 +1,50 @@
++resource "aws_vpc" "lab" {
++  cidr_block           = var.vpc_cidr
++  enable_dns_support   = true
++  enable_dns_hostnames = true
++  tags = { Name = "portscan-lab-vpc" }
++}
++
++resource "aws_internet_gateway" "lab" {
++  vpc_id = aws_vpc.lab.id
++  tags   = { Name = "portscan-lab-igw" }
++}
++
++resource "aws_subnet" "scanner" {
++  vpc_id                  = aws_vpc.lab.id
++  cidr_block              = var.scanner_subnet_cidr
++  map_public_ip_on_launch = true
++  tags                    = { Name = "portscan-scanner-subnet" }
++}
++
++resource "aws_subnet" "target" {
++  vpc_id                  = aws_vpc.lab.id
++  cidr_block              = var.target_subnet_cidr
++  map_public_ip_on_launch = false
++  tags                    = { Name = "portscan-target-subnet" }
++}
++
++resource "aws_route_table" "scanner" {
++  vpc_id = aws_vpc.lab.id
++  route {
++    cidr_block = "0.0.0.0/0"
++    gateway_id = aws_internet_gateway.lab.id
++  }
++  tags = { Name = "portscan-scanner-rt" }
++}
++
++resource "aws_route_table_association" "scanner" {
++  subnet_id      = aws_subnet.scanner.id
++  route_table_id = aws_route_table.scanner.id
++}
++
++# The target subnet intentionally has no default Internet route.
++resource "aws_route_table" "target" {
++  vpc_id = aws_vpc.lab.id
++  tags   = { Name = "portscan-target-rt" }
++}
++
++resource "aws_route_table_association" "target" {
++  subnet_id      = aws_subnet.target.id
++  route_table_id = aws_route_table.target.id
++}
+diff --git a/infra/aws/terraform/outputs.tf b/infra/aws/terraform/outputs.tf
+new file mode 100644
+index 0000000..7b5e66b
+--- /dev/null
++++ b/infra/aws/terraform/outputs.tf
+@@ -0,0 +1,40 @@
++output "aws_account_id" {
++  value = data.aws_caller_identity.current.account_id
++}
++
++output "aws_region" {
++  value = var.aws_region
++}
++
++output "vpc_id" {
++  value = aws_vpc.lab.id
++}
++
++output "scanner_instance_id" {
++  value = aws_instance.scanner.id
++}
++
++output "scanner_public_ip" {
++  value       = aws_instance.scanner.public_ip
++  description = "Outbound/SSM management path only; scanner SG has no inbound rules."
++}
++
++output "scanner_private_ip" {
++  value = aws_instance.scanner.private_ip
++}
++
++output "target_instance_id" {
++  value = aws_instance.target.id
++}
++
++output "target_private_ip" {
++  value = aws_instance.target.private_ip
++}
++
++output "target_security_group_id" {
++  value = aws_security_group.target.id
++}
++
++output "flow_log_group" {
++  value = aws_cloudwatch_log_group.flow.name
++}
+diff --git a/infra/aws/terraform/providers.tf b/infra/aws/terraform/providers.tf
+new file mode 100644
+index 0000000..5ac2097
+--- /dev/null
++++ b/infra/aws/terraform/providers.tf
+@@ -0,0 +1,17 @@
++provider "aws" {
++  region = var.aws_region
++
++  default_tags {
++    tags = {
++      Project   = "portscan-aws-security-lab"
++      ManagedBy = "terraform"
++      Purpose   = "authorized-security-training"
++    }
++  }
++}
++
++data "aws_caller_identity" "current" {}
++
++data "aws_ssm_parameter" "al2023_ami" {
++  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
++}
+diff --git a/infra/aws/terraform/security_groups.tf b/infra/aws/terraform/security_groups.tf
+new file mode 100644
+index 0000000..bc97141
+--- /dev/null
++++ b/infra/aws/terraform/security_groups.tf
+@@ -0,0 +1,46 @@
++resource "aws_security_group" "scanner" {
++  name        = "portscan-scanner-sg"
++  description = "No inbound administration ports; use SSM Session Manager"
++  vpc_id      = aws_vpc.lab.id
++  tags        = { Name = "portscan-scanner-sg" }
++}
++
++resource "aws_vpc_security_group_egress_rule" "scanner_all_egress" {
++  security_group_id = aws_security_group.scanner.id
++  cidr_ipv4         = "0.0.0.0/0"
++  ip_protocol       = "-1"
++  description       = "Outbound access for SSM and package/repository access"
++}
++
++resource "aws_security_group" "target" {
++  name        = "portscan-target-sg"
++  description = "Lab service is reachable only from the scanner Security Group"
++  vpc_id      = aws_vpc.lab.id
++  tags        = { Name = "portscan-target-sg" }
++}
++
++resource "aws_vpc_security_group_ingress_rule" "target_http_from_scanner" {
++  security_group_id            = aws_security_group.target.id
++  referenced_security_group_id = aws_security_group.scanner.id
++  from_port                    = 8080
++  to_port                      = 8080
++  ip_protocol                  = "tcp"
++  description                  = "Authorized scanner to demo HTTP service"
++}
++
++resource "aws_vpc_security_group_egress_rule" "target_all_egress" {
++  security_group_id = aws_security_group.target.id
++  cidr_ipv4         = "0.0.0.0/0"
++  ip_protocol       = "-1"
++  description       = "No Internet route exists for the target subnet; VPC-local return traffic is permitted"
++}
++
++resource "aws_vpc_security_group_ingress_rule" "demo_broad_ssh" {
++  count             = var.enable_demo_misconfiguration ? 1 : 0
++  security_group_id = aws_security_group.target.id
++  description       = "DEMO ONLY - broad SSH rule for configuration analyzer"
++  cidr_ipv4         = "0.0.0.0/0"
++  from_port         = 22
++  to_port           = 22
++  ip_protocol       = "tcp"
++}
+diff --git a/infra/aws/terraform/terraform.tfvars.example b/infra/aws/terraform/terraform.tfvars.example
+new file mode 100644
+index 0000000..7df88cf
+--- /dev/null
++++ b/infra/aws/terraform/terraform.tfvars.example
+@@ -0,0 +1,3 @@
++aws_region = "ap-northeast-2"
++enable_demo_misconfiguration = false
++# instance_type = "t3.micro"
+diff --git a/infra/aws/terraform/variables.tf b/infra/aws/terraform/variables.tf
+new file mode 100644
+index 0000000..25ed623
+--- /dev/null
++++ b/infra/aws/terraform/variables.tf
+@@ -0,0 +1,42 @@
++variable "aws_region" {
++  type        = string
++  description = "AWS region for the lab."
++  default     = "ap-northeast-2"
++}
++
++variable "vpc_cidr" {
++  type        = string
++  description = "Dedicated lab VPC CIDR."
++  default     = "10.20.0.0/16"
++}
++
++variable "scanner_subnet_cidr" {
++  type        = string
++  default     = "10.20.1.0/24"
++}
++
++variable "target_subnet_cidr" {
++  type        = string
++  default     = "10.20.2.0/24"
++}
++
++variable "instance_type" {
++  type        = string
++  description = "Small x86 instance type for both lab instances."
++  default     = "t3.micro"
++}
++
++variable "enable_demo_misconfiguration" {
++  type        = bool
++  description = "When true, adds Internet-wide SSH ingress to the private target SG for analyzer demonstration. The target still receives no public IP."
++  default     = false
++}
++
++variable "flow_log_retention_days" {
++  type        = number
++  default     = 1
++  validation {
++    condition     = contains([1, 3, 5, 7, 14, 30], var.flow_log_retention_days)
++    error_message = "Use a short supported CloudWatch Logs retention period for the lab."
++  }
++}
+diff --git a/infra/aws/terraform/versions.tf b/infra/aws/terraform/versions.tf
+new file mode 100644
+index 0000000..ab7ca93
+--- /dev/null
++++ b/infra/aws/terraform/versions.tf
+@@ -0,0 +1,9 @@
++terraform {
++  required_version = ">= 1.6.0"
++  required_providers {
++    aws = {
++      source  = "hashicorp/aws"
++      version = "~> 6.0"
++    }
++  }
++}
+diff --git a/requirements.txt b/requirements.txt
+index f944404..f13574f 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,4 +1,5 @@
+ beautifulsoup4>=4.12,<5
++boto3>=1.35,<2
+ colorama>=0.4,<1
+ mysql-connector-python>=8.0,<10
+ python-dotenv>=1,<2
+diff --git a/scripts/aws_inventory.py b/scripts/aws_inventory.py
+new file mode 100644
+index 0000000..b455088
+--- /dev/null
++++ b/scripts/aws_inventory.py
+@@ -0,0 +1,57 @@
++from __future__ import annotations
++
++import argparse
++import os
++from typing import Sequence
++
++from cloud_security.aws_inventory import AwsInventoryError, collect_inventory
++
++
++def build_parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(description="Read-only AWS EC2 inventory")
++    parser.add_argument("--region", default=os.getenv("AWS_REGION", "ap-northeast-2"))
++    parser.add_argument("--vpc-id", help="limit inventory to one VPC; required with --save")
++    parser.add_argument("--save", action="store_true", help="persist inventory to MySQL V6 tables")
++    return parser
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = build_parser().parse_args(argv)
++    if args.save and not args.vpc_id:
++        raise SystemExit("--save 사용 시 --vpc-id가 필요합니다. Private IP 충돌 방지를 위해 한 VPC만 저장합니다.")
++    try:
++        inventory = collect_inventory(region=args.region, vpc_id=args.vpc_id)
++    except (ValueError, AwsInventoryError) as exc:
++        print(f"[ERROR] {exc}")
++        return 2
++
++    print(f"Provider: {inventory['provider']}")
++    print(f"Region: {inventory['region']}")
++    print(f"Account: {inventory['account_id']}")
++    print(f"Resources: {len(inventory['resources'])}")
++    for resource in inventory["resources"]:
++        print(
++            f"  {resource['resource_id']}  {resource['private_ip']}  "
++            f"public={resource.get('public_ip') or '-'}  vpc={resource['vpc_id']}"
++        )
++
++    if args.save:
++        from db.cloud_repository import save_inventory
++        from db.db_client import get_connection
++        conn = get_connection()
++        try:
++            mapping = save_inventory(conn, inventory)
++            conn.commit()
++        except Exception:
++            conn.rollback()
++            raise
++        finally:
++            conn.close()
++        print(f"Saved cloud resources: {len(mapping)}")
++    else:
++        print("[DRY-RUN] AWS API was read-only; no database write was performed.")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/scripts/aws_security_review.py b/scripts/aws_security_review.py
+new file mode 100644
+index 0000000..013261b
+--- /dev/null
++++ b/scripts/aws_security_review.py
+@@ -0,0 +1,58 @@
++from __future__ import annotations
++
++import argparse
++import os
++from typing import Sequence
++
++from cloud_security.aws_inventory import AwsInventoryError, collect_inventory
++from cloud_security.aws_sg_analyzer import analyze_security_groups
++
++
++def build_parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(description="Read-only AWS Security Group review")
++    parser.add_argument("--region", default=os.getenv("AWS_REGION", "ap-northeast-2"))
++    parser.add_argument("--vpc-id", help="limit review to one VPC; required with --save")
++    parser.add_argument("--save", action="store_true", help="persist inventory and configuration findings")
++    return parser
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = build_parser().parse_args(argv)
++    if args.save and not args.vpc_id:
++        raise SystemExit("--save 사용 시 --vpc-id가 필요합니다.")
++    try:
++        inventory = collect_inventory(region=args.region, vpc_id=args.vpc_id)
++        findings = analyze_security_groups(inventory)
++    except (ValueError, AwsInventoryError) as exc:
++        print(f"[ERROR] {exc}")
++        return 2
++
++    print(f"Reviewed resources: {len(inventory['resources'])}")
++    print(f"Configuration findings: {len(findings)}")
++    for finding in findings:
++        print(
++            f"  {finding['rule_id']} {finding['severity']} {finding['priority']} "
++            f"{finding['resource_id']} - {finding['title']}"
++        )
++
++    if args.save:
++        from db.cloud_repository import save_inventory, sync_configuration_findings
++        from db.db_client import get_connection
++        conn = get_connection()
++        try:
++            mapping = save_inventory(conn, inventory)
++            count = sync_configuration_findings(conn, mapping, findings)
++            conn.commit()
++        except Exception:
++            conn.rollback()
++            raise
++        finally:
++            conn.close()
++        print(f"Saved/updated findings: {count}")
++    else:
++        print("[DRY-RUN] AWS API was read-only; no database write was performed.")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/sql/init.sql b/sql/init.sql
+index b5bf3db..dca45e4 100644
+--- a/sql/init.sql
++++ b/sql/init.sql
+@@ -432,3 +432,64 @@ CREATE TABLE IF NOT EXISTS vuln_risk_assessments (
+         (vuln_status = 'RETEST_REQUIRED' AND action = 'RETEST')
+     )
+ ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
++
++-- V6 AWS cloud context and configuration findings.
++CREATE TABLE IF NOT EXISTS cloud_resources (
++    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
++    host_id BIGINT UNSIGNED NOT NULL,
++    provider VARCHAR(32) NOT NULL,
++    account_id VARCHAR(32) NOT NULL,
++    region VARCHAR(64) NOT NULL,
++    resource_type VARCHAR(64) NOT NULL,
++    resource_id VARCHAR(128) NOT NULL,
++    vpc_id VARCHAR(64) NOT NULL,
++    subnet_id VARCHAR(64) NULL,
++    private_ip VARCHAR(45) NOT NULL,
++    public_ip VARCHAR(45) NULL,
++    instance_state VARCHAR(32) NULL,
++    security_groups JSON NOT NULL,
++    tags JSON NOT NULL,
++    first_discovered_at DATETIME NOT NULL,
++    last_discovered_at DATETIME NOT NULL,
++
++    PRIMARY KEY (id),
++    UNIQUE KEY uq_cloud_host (host_id),
++    UNIQUE KEY uq_cloud_identity (provider, account_id, region, resource_id),
++    INDEX idx_cloud_vpc (vpc_id),
++    INDEX idx_cloud_private_ip (private_ip),
++    INDEX idx_cloud_last_discovered (last_discovered_at),
++    CONSTRAINT fk_cloud_host FOREIGN KEY (host_id) REFERENCES hosts(id) ON DELETE CASCADE,
++    CONSTRAINT chk_cloud_provider CHECK (provider = 'AWS'),
++    CONSTRAINT chk_cloud_resource_type CHECK (resource_type = 'EC2'),
++    CONSTRAINT chk_cloud_times CHECK (last_discovered_at >= first_discovered_at)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
++
++CREATE TABLE IF NOT EXISTS cloud_configuration_findings (
++    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
++    cloud_resource_id BIGINT UNSIGNED NOT NULL,
++    rule_id VARCHAR(64) NOT NULL,
++    category VARCHAR(64) NOT NULL,
++    title VARCHAR(255) NOT NULL,
++    severity ENUM('INFO','LOW','MEDIUM','HIGH','CRITICAL') NOT NULL,
++    priority ENUM('P1','P2','P3','P4','UNASSESSED') NOT NULL,
++    status ENUM('OPEN','RESOLVED') NOT NULL DEFAULT 'OPEN',
++    public_address_present BOOLEAN NOT NULL,
++    evidence JSON NOT NULL,
++    remediation VARCHAR(1000) NOT NULL,
++    input_sha256 CHAR(64) NOT NULL,
++    first_detected_at DATETIME NOT NULL,
++    last_detected_at DATETIME NOT NULL,
++    resolved_at DATETIME NULL,
++    observations INT UNSIGNED NOT NULL DEFAULT 1,
++
++    PRIMARY KEY (id),
++    UNIQUE KEY uq_cloud_finding_rule (cloud_resource_id, rule_id),
++    INDEX idx_cloud_finding_status (status),
++    INDEX idx_cloud_finding_priority (priority),
++    INDEX idx_cloud_finding_last_detected (last_detected_at),
++    CONSTRAINT fk_cloud_finding_resource FOREIGN KEY (cloud_resource_id)
++        REFERENCES cloud_resources(id) ON DELETE CASCADE,
++    CONSTRAINT chk_cloud_finding_public CHECK (public_address_present IN (0,1)),
++    CONSTRAINT chk_cloud_finding_observations CHECK (observations >= 1),
++    CONSTRAINT chk_cloud_finding_times CHECK (last_detected_at >= first_detected_at)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+diff --git a/sql/migration_v6.sql b/sql/migration_v6.sql
+new file mode 100644
+index 0000000..5fcf58e
+--- /dev/null
++++ b/sql/migration_v6.sql
+@@ -0,0 +1,78 @@
++USE port_scan;
++
++-- V6: AWS cloud asset context and configuration findings.
++-- Prerequisite: V5 schema. Back up the database before applying.
++DELIMITER $$
++DROP PROCEDURE IF EXISTS portscan_migrate_v6$$
++CREATE PROCEDURE portscan_migrate_v6()
++BEGIN
++    IF NOT EXISTS (
++        SELECT 1 FROM information_schema.tables
++        WHERE table_schema = DATABASE() AND table_name = 'vuln_risk_assessments'
++    ) THEN
++        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'V5 schema is required before V6';
++    END IF;
++
++    CREATE TABLE IF NOT EXISTS cloud_resources (
++        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
++        host_id BIGINT UNSIGNED NOT NULL,
++        provider VARCHAR(32) NOT NULL,
++        account_id VARCHAR(32) NOT NULL,
++        region VARCHAR(64) NOT NULL,
++        resource_type VARCHAR(64) NOT NULL,
++        resource_id VARCHAR(128) NOT NULL,
++        vpc_id VARCHAR(64) NOT NULL,
++        subnet_id VARCHAR(64) NULL,
++        private_ip VARCHAR(45) NOT NULL,
++        public_ip VARCHAR(45) NULL,
++        instance_state VARCHAR(32) NULL,
++        security_groups JSON NOT NULL,
++        tags JSON NOT NULL,
++        first_discovered_at DATETIME NOT NULL,
++        last_discovered_at DATETIME NOT NULL,
++
++        PRIMARY KEY (id),
++        UNIQUE KEY uq_cloud_host (host_id),
++        UNIQUE KEY uq_cloud_identity (provider, account_id, region, resource_id),
++        INDEX idx_cloud_vpc (vpc_id),
++        INDEX idx_cloud_private_ip (private_ip),
++        INDEX idx_cloud_last_discovered (last_discovered_at),
++        CONSTRAINT fk_cloud_host FOREIGN KEY (host_id) REFERENCES hosts(id) ON DELETE CASCADE,
++        CONSTRAINT chk_cloud_provider CHECK (provider = 'AWS'),
++        CONSTRAINT chk_cloud_resource_type CHECK (resource_type = 'EC2'),
++        CONSTRAINT chk_cloud_times CHECK (last_discovered_at >= first_discovered_at)
++    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
++
++    CREATE TABLE IF NOT EXISTS cloud_configuration_findings (
++        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
++        cloud_resource_id BIGINT UNSIGNED NOT NULL,
++        rule_id VARCHAR(64) NOT NULL,
++        category VARCHAR(64) NOT NULL,
++        title VARCHAR(255) NOT NULL,
++        severity ENUM('INFO','LOW','MEDIUM','HIGH','CRITICAL') NOT NULL,
++        priority ENUM('P1','P2','P3','P4','UNASSESSED') NOT NULL,
++        status ENUM('OPEN','RESOLVED') NOT NULL DEFAULT 'OPEN',
++        public_address_present BOOLEAN NOT NULL,
++        evidence JSON NOT NULL,
++        remediation VARCHAR(1000) NOT NULL,
++        input_sha256 CHAR(64) NOT NULL,
++        first_detected_at DATETIME NOT NULL,
++        last_detected_at DATETIME NOT NULL,
++        resolved_at DATETIME NULL,
++        observations INT UNSIGNED NOT NULL DEFAULT 1,
++
++        PRIMARY KEY (id),
++        UNIQUE KEY uq_cloud_finding_rule (cloud_resource_id, rule_id),
++        INDEX idx_cloud_finding_status (status),
++        INDEX idx_cloud_finding_priority (priority),
++        INDEX idx_cloud_finding_last_detected (last_detected_at),
++        CONSTRAINT fk_cloud_finding_resource FOREIGN KEY (cloud_resource_id)
++            REFERENCES cloud_resources(id) ON DELETE CASCADE,
++        CONSTRAINT chk_cloud_finding_public CHECK (public_address_present IN (0,1)),
++        CONSTRAINT chk_cloud_finding_observations CHECK (observations >= 1),
++        CONSTRAINT chk_cloud_finding_times CHECK (last_detected_at >= first_detected_at)
++    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
++END$$
++CALL portscan_migrate_v6()$$
++DROP PROCEDURE portscan_migrate_v6$$
++DELIMITER ;
+diff --git a/sql/verify_v6.sql b/sql/verify_v6.sql
+new file mode 100644
+index 0000000..34b083f
+--- /dev/null
++++ b/sql/verify_v6.sql
+@@ -0,0 +1,40 @@
++USE port_scan;
++
++SELECT table_name
++FROM information_schema.tables
++WHERE table_schema = DATABASE()
++  AND table_name IN ('cloud_resources', 'cloud_configuration_findings')
++ORDER BY table_name;
++
++SELECT
++    cr.id,
++    h.asset_uid,
++    h.host_ip,
++    h.asset_type,
++    cr.provider,
++    cr.region,
++    cr.resource_id,
++    cr.vpc_id,
++    cr.subnet_id,
++    cr.private_ip,
++    cr.public_ip,
++    cr.instance_state,
++    cr.last_discovered_at
++FROM cloud_resources AS cr
++JOIN hosts AS h ON h.id = cr.host_id
++ORDER BY cr.id DESC
++LIMIT 20;
++
++SELECT
++    cf.rule_id,
++    cf.severity,
++    cf.priority,
++    cf.status,
++    cf.public_address_present,
++    cr.resource_id,
++    cr.private_ip,
++    cf.observations,
++    cf.last_detected_at
++FROM cloud_configuration_findings AS cf
++JOIN cloud_resources AS cr ON cr.id = cf.cloud_resource_id
++ORDER BY FIELD(cf.priority, 'P1','P2','P3','P4','UNASSESSED'), cf.rule_id;
+diff --git a/tests/test_analysis_report.py b/tests/test_analysis_report.py
+index 8e95777..45c2dd1 100644
+--- a/tests/test_analysis_report.py
++++ b/tests/test_analysis_report.py
+@@ -1,4 +1,4 @@
+-"""Read-only report data tests against a V5 DB-API fixture; no MySQL or external I/O."""
++"""Read-only report data tests against a V6-capable DB-API fixture; no MySQL or external I/O."""
+ import contextlib
+ import copy
+ import json
+@@ -68,7 +68,9 @@ def fixture_data():
+             "history": [{"history_id": 2, "vuln_id": 101, "from_status": "CANDIDATE", "to_status": "POTENTIAL", "action_type": "STATUS_CHANGE",
+                          "reason": "추가 확인 필요", "changed_by": "verifier", "changed_at": NOW},
+                         {"history_id": 1, "vuln_id": 101, "from_status": None, "to_status": "CANDIDATE", "action_type": "STATUS_CHANGE",
+-                         "reason": "후보 생성", "changed_by": "mapper", "changed_at": datetime(2026, 9, 7)}]}
++                         "reason": "후보 생성", "changed_by": "mapper", "changed_at": datetime(2026, 9, 7)}],
++            "cloud_resources": [],
++            "cloud_findings": []}
+ 
+ 
+ class FixtureDB:
+@@ -166,6 +168,11 @@ class FixtureCursor:
+             self.rows = [row for row in data["evidence"] if row["vuln_id"] in params]
+         elif text.startswith("SELECT rh.id AS history_id"):
+             self.rows = [row for row in data["history"] if row["vuln_id"] in params]
++        elif text.startswith("SELECT cr.id AS cloud_resource_id"):
++            self.rows = [row for row in data["cloud_resources"] if row["host_id"] in params]
++        elif text.startswith("SELECT cf.id AS cloud_finding_id"):
++            self.rows = [row for row in data["cloud_findings"]
++                         if row["cloud_resource_id"] in params and row["status"] == "OPEN"]
+         else:
+             raise AssertionError("Unexpected SELECT: " + text)
+ 
+@@ -198,6 +205,35 @@ class AnalysisReportTests(unittest.TestCase):
+         self.assertEqual(report["scans"][0]["scope"]["authorization_ref"], "LAB-APPROVAL")
+         self.assertEqual(report["scans"][0]["requested_targets"], ["localhost"])
+ 
++
++    def test_cloud_asset_context_and_configuration_findings_are_separate_from_cves(self):
++        self.db.data["hosts"][0]["asset_type"] = "CLOUD_RESOURCE"
++        self.db.data["hosts"][0]["host_ip"] = "10.20.2.10"
++        self.db.data["cloud_resources"] = [{
++            "cloud_resource_id": 501, "host_id": 1, "provider": "AWS", "account_id": "123456789012",
++            "region": "ap-northeast-2", "resource_type": "EC2", "resource_id": "i-demo",
++            "vpc_id": "vpc-demo", "subnet_id": "subnet-demo", "private_ip": "10.20.2.10",
++            "public_ip": None, "instance_state": "running",
++            "security_groups": json.dumps([{"group_id": "sg-demo"}]),
++            "tags": json.dumps({"Name": "target"}), "first_discovered_at": NOW, "last_discovered_at": NOW,
++        }]
++        self.db.data["cloud_findings"] = [{
++            "cloud_finding_id": 601, "cloud_resource_id": 501, "rule_id": "AWS-SG-001",
++            "category": "NETWORK_EXPOSURE", "title": "SSH ingress is open to the Internet",
++            "severity": "HIGH", "priority": "P3", "status": "OPEN", "public_address_present": 0,
++            "evidence": json.dumps({"public_address_present": False}), "remediation": "restrict",
++            "input_sha256": "9" * 64, "first_detected_at": NOW, "last_detected_at": NOW,
++            "resolved_at": None, "observations": 1,
++        }]
++        report = self.build()
++        asset = report["assets"][0]
++        self.assertEqual(asset["cloud"]["resource_id"], "i-demo")
++        self.assertEqual(asset["cloud"]["security_groups"], [{"group_id": "sg-demo"}])
++        self.assertEqual(asset["cloud_configuration_findings"][0]["rule_id"], "AWS-SG-001")
++        self.assertEqual(report["summary"]["cloud_configuration_finding_count"], 1)
++        self.assertEqual(report["summary"]["cloud_priority_counts"]["P3"], 1)
++        self.assertEqual(report["summary"]["finding_count"], 1)
++
+     def test_scan_selection_current_ports_even_when_host_has_newer_scan(self):
+         report = build_report_snapshot(scan_id=4)
+         self.assertEqual(report["summary"]["asset_count"], 2)
+diff --git a/tests/test_aws_inventory.py b/tests/test_aws_inventory.py
+new file mode 100644
+index 0000000..86678cd
+--- /dev/null
++++ b/tests/test_aws_inventory.py
+@@ -0,0 +1,89 @@
++import sys
++import unittest
++from pathlib import Path
++
++PROJECT_ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(PROJECT_ROOT))
++
++from cloud_security.aws_inventory import collect_inventory, validate_region, validate_vpc_id
++
++
++class FakeSTS:
++    def get_caller_identity(self):
++        return {"Account": "123456789012", "Arn": "ignored", "UserId": "ignored"}
++
++
++class FakePaginator:
++    def paginate(self, **kwargs):
++        self.filters = kwargs["Filters"]
++        return [{"Reservations": [{"Instances": [{
++            "InstanceId": "i-0123456789abcdef0",
++            "VpcId": "vpc-0123abcd",
++            "SubnetId": "subnet-0123abcd",
++            "PrivateIpAddress": "10.20.2.10",
++            "PublicIpAddress": None,
++            "State": {"Name": "running"},
++            "SecurityGroups": [{"GroupId": "sg-0123abcd", "GroupName": "target"}],
++            "Tags": [
++                {"Key": "Name", "Value": "portscan-target"},
++                {"Key": "api_token", "Value": "must-not-be-copied"},
++            ],
++        }]}]}]
++
++
++class FakeEC2:
++    def __init__(self):
++        self.paginator = FakePaginator()
++        self.group_calls = []
++
++    def get_paginator(self, name):
++        assert name == "describe_instances"
++        return self.paginator
++
++    def describe_security_groups(self, GroupIds):
++        self.group_calls.append(GroupIds)
++        return {"SecurityGroups": [{
++            "GroupId": "sg-0123abcd",
++            "GroupName": "target",
++            "VpcId": "vpc-0123abcd",
++            "IpPermissions": [{
++                "IpProtocol": "tcp", "FromPort": 8080, "ToPort": 8080,
++                "UserIdGroupPairs": [{"GroupId": "sg-scanner"}],
++                "IpRanges": [], "Ipv6Ranges": [],
++            }],
++        }]}
++
++
++class AwsInventoryTests(unittest.TestCase):
++    def test_collect_inventory_is_normalized_and_filters_one_vpc(self):
++        ec2 = FakeEC2()
++        result = collect_inventory(
++            region="ap-northeast-2",
++            vpc_id="vpc-0123abcd",
++            sts_client=FakeSTS(),
++            ec2_client=ec2,
++        )
++        self.assertEqual(result["account_id"], "123456789012")
++        self.assertEqual(len(result["resources"]), 1)
++        resource = result["resources"][0]
++        self.assertEqual(resource["private_ip"], "10.20.2.10")
++        self.assertEqual(resource["asset_name"], "portscan-target")
++        self.assertNotIn("api_token", resource["tags"])
++        self.assertEqual(resource["security_groups"][0]["group_id"], "sg-0123abcd")
++        self.assertIn({"Name": "vpc-id", "Values": ["vpc-0123abcd"]}, ec2.paginator.filters)
++
++    def test_invalid_region_and_vpc_rejected_before_clients(self):
++        for region in ("", "seoul", "ap-northeast", "../../x"):
++            with self.subTest(region=region), self.assertRaises(ValueError):
++                validate_region(region)
++        for vpc in ("vpc-", "not-vpc", "vpc-xyz"):
++            with self.subTest(vpc=vpc), self.assertRaises(ValueError):
++                validate_vpc_id(vpc)
++
++    def test_one_missing_injected_client_is_rejected(self):
++        with self.assertRaises(ValueError):
++            collect_inventory(region="ap-northeast-2", sts_client=FakeSTS())
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_aws_sg_analyzer.py b/tests/test_aws_sg_analyzer.py
+new file mode 100644
+index 0000000..88f6061
+--- /dev/null
++++ b/tests/test_aws_sg_analyzer.py
+@@ -0,0 +1,82 @@
++import sys
++import unittest
++from pathlib import Path
++
++PROJECT_ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(PROJECT_ROOT))
++
++from cloud_security.aws_sg_analyzer import analyze_security_groups
++
++
++def inventory(permission, public_ip=None):
++    return {"resources": [{
++        "resource_id": "i-demo",
++        "private_ip": "10.20.2.10",
++        "public_ip": public_ip,
++        "vpc_id": "vpc-demo",
++        "security_groups": [{"group_id": "sg-demo", "ip_permissions": [permission]}],
++    }]}
++
++
++class AwsSecurityGroupAnalyzerTests(unittest.TestCase):
++    def test_ssh_world_open_is_high_and_private_only_is_p3(self):
++        findings = analyze_security_groups(inventory({
++            "IpProtocol": "tcp", "FromPort": 22, "ToPort": 22,
++            "IpRanges": [{"CidrIp": "0.0.0.0/0"}], "Ipv6Ranges": [],
++        }))
++        self.assertEqual([(f["rule_id"], f["severity"], f["priority"]) for f in findings],
++                         [("AWS-SG-001", "HIGH", "P3")])
++        self.assertFalse(findings[0]["public_address_present"])
++        self.assertIn("not evaluated", findings[0]["evidence"]["reachability_limit"])
++
++    def test_public_address_raises_context_priority_but_not_reachability_claim(self):
++        finding = analyze_security_groups(inventory({
++            "IpProtocol": "tcp", "FromPort": 3306, "ToPort": 3306,
++            "IpRanges": [], "Ipv6Ranges": [{"CidrIpv6": "::/0"}],
++        }, public_ip="203.0.113.10"))[0]
++        self.assertEqual((finding["rule_id"], finding["priority"]), ("AWS-SG-003", "P2"))
++        self.assertTrue(finding["public_address_present"])
++
++    def test_public_web_port_alone_is_not_a_finding(self):
++        findings = analyze_security_groups(inventory({
++            "IpProtocol": "tcp", "FromPort": 80, "ToPort": 80,
++            "IpRanges": [{"CidrIp": "0.0.0.0/0"}], "Ipv6Ranges": [],
++        }, public_ip="203.0.113.10"))
++        self.assertEqual(findings, [])
++
++    def test_all_protocol_world_open_is_single_critical_rule(self):
++        findings = analyze_security_groups(inventory({
++            "IpProtocol": "-1",
++            "IpRanges": [{"CidrIp": "0.0.0.0/0"}], "Ipv6Ranges": [],
++        }, public_ip="203.0.113.10"))
++        self.assertEqual(len(findings), 1)
++        self.assertEqual((findings[0]["rule_id"], findings[0]["severity"], findings[0]["priority"]),
++                         ("AWS-SG-006", "CRITICAL", "P1"))
++
++    def test_security_group_reference_is_not_internet_wide(self):
++        findings = analyze_security_groups(inventory({
++            "IpProtocol": "tcp", "FromPort": 22, "ToPort": 22,
++            "UserIdGroupPairs": [{"GroupId": "sg-scanner"}],
++            "IpRanges": [], "Ipv6Ranges": [],
++        }))
++        self.assertEqual(findings, [])
++
++    def test_duplicate_permissions_aggregate_into_one_stable_finding(self):
++        inv = {"resources": [{
++            "resource_id": "i-demo", "private_ip": "10.20.2.10", "public_ip": None, "vpc_id": "vpc-demo",
++            "security_groups": [
++                {"group_id": "sg-b", "ip_permissions": [{"IpProtocol": "tcp", "FromPort": 22, "ToPort": 22,
++                                                           "IpRanges": [{"CidrIp": "0.0.0.0/0"}]}]},
++                {"group_id": "sg-a", "ip_permissions": [{"IpProtocol": "tcp", "FromPort": 20, "ToPort": 30,
++                                                           "Ipv6Ranges": [{"CidrIpv6": "::/0"}]}]},
++            ],
++        }]}
++        first = analyze_security_groups(inv)
++        second = analyze_security_groups(inv)
++        self.assertEqual(len(first), 1)
++        self.assertEqual(first[0]["input_sha256"], second[0]["input_sha256"])
++        self.assertEqual([m["security_group_id"] for m in first[0]["evidence"]["matched_permissions"]], ["sg-a", "sg-b"])
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_cloud_repository.py b/tests/test_cloud_repository.py
+new file mode 100644
+index 0000000..efd6941
+--- /dev/null
++++ b/tests/test_cloud_repository.py
+@@ -0,0 +1,94 @@
++import sys
++import unittest
++from pathlib import Path
++
++PROJECT_ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(PROJECT_ROOT))
++
++from db.cloud_repository import save_inventory, sync_configuration_findings
++
++
++class FakeCursor:
++    def __init__(self):
++        self.executions = []
++        self.lastrowid = 0
++
++    def __enter__(self):
++        return self
++
++    def __exit__(self, *_args):
++        return False
++
++    def execute(self, sql, params=()):
++        self.executions.append((" ".join(sql.split()), params))
++        if "INSERT INTO hosts" in sql:
++            self.lastrowid = 10
++        elif "INSERT INTO cloud_resources" in sql:
++            self.lastrowid = 20
++
++
++class FakeConnection:
++    def __init__(self):
++        self.cursor_object = FakeCursor()
++
++    def cursor(self, **_kwargs):
++        return self.cursor_object
++
++
++class CloudRepositoryTests(unittest.TestCase):
++    def test_inventory_upserts_host_and_cloud_resource_without_commit(self):
++        conn = FakeConnection()
++        mapping = save_inventory(conn, {
++            "account_id": "123456789012",
++            "region": "ap-northeast-2",
++            "vpc_id_filter": "vpc-demo",
++            "resources": [{
++                "resource_id": "i-demo", "vpc_id": "vpc-demo", "subnet_id": "subnet-demo",
++                "private_ip": "10.20.2.10", "public_ip": None, "asset_name": "target",
++                "instance_state": "running", "security_groups": [], "tags": {"Name": "target"},
++            }],
++        })
++        self.assertEqual(mapping["i-demo"], {"host_id": 10, "cloud_resource_id": 20})
++        sql = " ".join(item[0] for item in conn.cursor_object.executions)
++        self.assertIn("asset_type", sql)
++        self.assertIn("cloud_resources", sql)
++        self.assertNotIn("COMMIT", sql.upper())
++
++    def test_inventory_save_requires_one_vpc_filter(self):
++        with self.assertRaises(ValueError):
++            save_inventory(FakeConnection(), {
++                "account_id": "123456789012",
++                "region": "ap-northeast-2",
++                "resources": [],
++            })
++
++    def test_findings_upsert_and_resolve_unobserved_rules(self):
++        conn = FakeConnection()
++        count = sync_configuration_findings(
++            conn,
++            {"i-demo": {"host_id": 10, "cloud_resource_id": 20}},
++            [{
++                "resource_id": "i-demo", "rule_id": "AWS-SG-001", "category": "NETWORK_EXPOSURE",
++                "title": "SSH broad", "severity": "HIGH", "priority": "P3",
++                "public_address_present": False, "evidence": {"safe": True},
++                "remediation": "restrict", "input_sha256": "a" * 64,
++            }],
++        )
++        self.assertEqual(count, 1)
++        texts = [sql for sql, _ in conn.cursor_object.executions]
++        self.assertTrue(any("INSERT INTO cloud_configuration_findings" in sql for sql in texts))
++        self.assertTrue(any("status='RESOLVED'" in sql and "NOT IN" in sql for sql in texts))
++
++    def test_no_findings_resolves_existing_open_findings_for_reviewed_resource(self):
++        conn = FakeConnection()
++        count = sync_configuration_findings(
++            conn,
++            {"i-demo": {"host_id": 10, "cloud_resource_id": 20}},
++            [],
++        )
++        self.assertEqual(count, 0)
++        self.assertTrue(any("status='RESOLVED'" in sql for sql, _ in conn.cursor_object.executions))
++
++
++if __name__ == "__main__":
++    unittest.main()

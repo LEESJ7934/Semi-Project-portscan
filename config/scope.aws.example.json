@@ -1,0 +1,12 @@
+{
+  "scope_uid": "aws-lab-v1",
+  "name": "AWS private target lab",
+  "authorization_ref": "SELF-OWNED-AWS-LAB",
+  "approved_by": "lab-owner",
+  "valid_from": "2026-01-01T00:00:00+00:00",
+  "valid_until": "2027-01-01T00:00:00+00:00",
+  "allowed_targets": ["10.20.2.0/24"],
+  "max_targets": 16,
+  "max_workers": 100,
+  "max_ports_per_target": 1024
+}
