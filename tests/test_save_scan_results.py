@@ -13,6 +13,7 @@ from db.save_scan_results import save_scan_results  # noqa: E402
 class SaveScanResultsTests(unittest.TestCase):
     @patch("db.save_scan_results.record_scan_asset")
     @patch("db.save_scan_results.upsert_port")
+    @patch("db.save_scan_results.find_cloud_host_by_ip")
     @patch("db.save_scan_results.upsert_host")
     @patch("db.save_scan_results.insert_scan")
     @patch("db.save_scan_results.upsert_scan_scope")
@@ -23,6 +24,7 @@ class SaveScanResultsTests(unittest.TestCase):
         upsert_scan_scope,
         insert_scan,
         upsert_host,
+        find_cloud_host_by_ip,
         upsert_port,
         record_scan_asset,
     ):
@@ -30,6 +32,7 @@ class SaveScanResultsTests(unittest.TestCase):
         get_connection.return_value = connection
         upsert_scan_scope.return_value = 3
         insert_scan.return_value = 10
+        find_cloud_host_by_ip.return_value = None
         upsert_host.return_value = 20
         upsert_port.return_value = 30
         scope = {
@@ -111,6 +114,56 @@ class SaveScanResultsTests(unittest.TestCase):
         connection.commit.assert_called_once()
         connection.rollback.assert_not_called()
         connection.close.assert_called_once()
+
+    @patch("db.save_scan_results.record_scan_asset")
+    @patch("db.save_scan_results.upsert_port")
+    @patch("db.save_scan_results.find_cloud_host_by_ip")
+    @patch("db.save_scan_results.upsert_host")
+    @patch("db.save_scan_results.insert_scan")
+    @patch("db.save_scan_results.get_connection")
+    def test_public_cloud_ip_reuses_private_ip_host(
+        self,
+        get_connection,
+        insert_scan,
+        upsert_host,
+        find_cloud_host_by_ip,
+        upsert_port,
+        record_scan_asset,
+    ):
+        connection = MagicMock()
+        get_connection.return_value = connection
+        insert_scan.return_value = 77
+        upsert_host.return_value = 9
+        find_cloud_host_by_ip.return_value = {
+            "host_id": 9,
+            "private_ip": "10.0.0.10",
+            "public_ip": "203.0.113.45",
+            "resource_id": "i-demo",
+        }
+        result = {
+            "scan_id": "scan-cloud-public",
+            "scan_type": "tcp",
+            "port_range": "80",
+            "started_at": "2026-09-14 10:00:00",
+            "finished_at": "2026-09-14 10:00:01",
+            "requested_targets": ["203.0.113.45"],
+            "targets": [{
+                "ip": "203.0.113.45",
+                "input_target": "203.0.113.45",
+                "resolution_type": "IP",
+                "results": [{"port": 80, "protocol": "tcp", "state": "open", "service": "http"}],
+            }],
+        }
+
+        with patch("db.save_scan_results.resolve_hostname", return_value="ec2.example"):
+            self.assertEqual(save_scan_results(result), 77)
+
+        find_cloud_host_by_ip.assert_called_once_with(connection, "203.0.113.45")
+        self.assertEqual(upsert_host.call_args.kwargs["host_ip"], "10.0.0.10")
+        record_scan_asset.assert_called_once_with(
+            conn=connection, scan_id=77, host_id=9, input_target="203.0.113.45",
+            resolution_type="IP", result_status="SCANNED", open_port_count=1,
+        )
 
     @patch("db.save_scan_results.insert_scan")
     @patch("db.save_scan_results.get_connection")

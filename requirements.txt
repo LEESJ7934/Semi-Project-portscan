@@ -1,4 +1,6 @@
 beautifulsoup4>=4.12,<5
+boto3>=1.35,<2
+botocore[crt]>=1.35,<2
 colorama>=0.4,<1
 mysql-connector-python>=8.0,<10
 python-dotenv>=1,<2

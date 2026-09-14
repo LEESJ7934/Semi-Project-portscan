@@ -380,3 +380,29 @@ CURRENT는 source API를 새로 조회했다는 뜻이 아니다.
 
 JSON snapshot의 SHA-256에서는 generated_at과 hash 자체를 제외한다.
 이 값은 내용 동일성 확인용이며 전자서명이나 DB 원본의 진위를 증명하는 값은 아니다.
+
+## V6 AWS cloud extension
+
+V6 keeps the existing `hosts` table as the scanner's primary asset identity and adds two AWS-specific tables.
+
+```text
+hosts
+  1 ─── 0..1 cloud_resources
+              1 ─── 0..N cloud_configuration_findings
+```
+
+### cloud_resources
+
+Stores normalized EC2 context for a `CLOUD_RESOURCE` host: AWS account, region, instance ID, VPC/subnet, primary private/public IP, instance state, Security Group snapshot and sanitized tags.
+
+`UNIQUE(provider, account_id, region, resource_id)` prevents duplicate EC2 identities and `UNIQUE(host_id)` keeps one current cloud context per host.
+
+### cloud_configuration_findings
+
+Stores AWS configuration findings separately from `vulns` so a Security Group exposure is never represented as a CVE. Current V6 rules focus on Internet-wide SSH/RDP/database ingress and all-port/all-protocol ingress.
+
+A repeated rule updates the same row and increments `observations`. A later review that no longer sees the rule sets `status=RESOLVED` and `resolved_at`.
+
+### Scope limitation
+
+The pre-existing `hosts.host_ip` uniqueness is IP-centric. V6 therefore persists one VPC at a time (`--vpc-id` required with `--save`) and does not claim multi-account/overlapping-RFC1918 asset identity support.

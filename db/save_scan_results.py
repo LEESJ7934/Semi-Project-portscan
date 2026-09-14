@@ -5,6 +5,7 @@ from db.asset_repository import (
     upsert_scan_scope,
 )
 from db.db_client import get_connection
+from db.cloud_repository import find_cloud_host_by_ip
 from db.query_helpers import (
     insert_scan,
     upsert_host,
@@ -110,9 +111,20 @@ def save_scan_results(
                 else resolve_hostname(host_ip)
             )
 
+            # AWS inventory stores the canonical EC2 host on its private IP,
+            # while an authorized external scan commonly targets the public IP.
+            # Reuse the canonical cloud host instead of creating a duplicate
+            # public-IP host row. Non-cloud targets keep the original behavior.
+            cloud_host = find_cloud_host_by_ip(conn, host_ip)
+            canonical_host_ip = (
+                cloud_host.get("private_ip")
+                if cloud_host and cloud_host.get("private_ip")
+                else host_ip
+            )
+
             host_id = upsert_host(
                 conn=conn,
-                host_ip=host_ip,
+                host_ip=canonical_host_ip,
                 host_name=host_name,
                 last_scan_id=scan_db_id,
             )

@@ -316,3 +316,17 @@ Nuclei 결과 하나만으로 자동 `CONFIRMED`를 만드는 구조가 아니�
 - [서비스 식별과 CVE 후보](day4_service_cve_mapping.md)
 - [검증 기록](validation.md)
 - [포트폴리오·면접 스토리](project_story.md)
+
+## AWS V6 extension
+
+The cloud extension is an adapter around the existing scan pipeline, not a replacement scanner.
+
+```text
+AWS read-only API
+  ├─ EC2 inventory ──> hosts + cloud_resources
+  └─ Security Groups ──> cloud_configuration_findings
+
+approved ScopePolicy ──> existing private-IP scanner ──> CVE pipeline
+```
+
+CVE findings and AWS configuration findings remain separate data types. AWS discovery never triggers a scan automatically. See `docs/aws_architecture.md` for network/IAM design and `docs/aws_validation.md` for the lab runbook.
