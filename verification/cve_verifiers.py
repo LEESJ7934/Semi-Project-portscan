@@ -1,4 +1,4 @@
-"""CVE-specific, read-only verification for the unchanged Day 4 catalog."""
+"""CVE-specific, read-only verification for the unchanged 검토된 CVE 카탈로그."""
 from __future__ import annotations
 
 import re
@@ -9,7 +9,7 @@ from scanner.fingerprints import identify_service
 from .base_checker import BaseChecker, check_result
 
 
-VERIFIER_VERSION = "day5.1"
+VERIFIER_VERSION = "cve-verifier-v1"
 
 
 class CVEVerifier(BaseChecker):
@@ -51,7 +51,7 @@ class CVEVerifier(BaseChecker):
             service = "https"
         details["safe_checks"] = (["tcp_connect", "ssh_greeting_only"] if service == "ssh"
                                   else ["tcp_connect", "http_head_root_no_redirects"])
-        # Reuse Day 4's bounded transport and TLS support; connect only to the scoped numeric IP.
+        # Reuse 서비스·CVE 매핑's bounded transport and TLS support; connect only to the scoped numeric IP.
         try:
             observation = collect_banner(port_record["host_ip"], port_record["port"], service,
                                          timeout=self.timeout, server_name=port_record.get("server_name"))

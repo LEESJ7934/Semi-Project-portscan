@@ -48,7 +48,7 @@ def asset(**updates):
 
 
 def stored_row(vuln_id=1, **updates):
-    return {"vuln_id": vuln_id, "cve_id": CVE, "source": "day4:apache:cve-2021-42013", "status": "CANDIDATE",
+    return {"vuln_id": vuln_id, "cve_id": CVE, "source": "catalog:apache:cve-2021-42013", "status": "CANDIDATE",
             "cvss": 8.4, "epss": 0.65432, "risk": 0.71, "severity": "HIGH", "verified_at": "2026-09-01",
             "closed_at": None, "port_id": 10, "port": 8081, "protocol": "tcp", "scan_id": 4,
             "host_id": 2, "asset_uid": ASSET, "host_ip": "127.0.0.1", "asset_name": "local-lab",
@@ -228,8 +228,8 @@ class MemoryCursor:
             assert conn.started and conn.locked, "Writes need a locked parent and transaction"
         if sql.startswith("SELECT v.id AS vuln_id"):
             rows = state["rows"]
-            if "v.source LIKE 'day4:%'" in sql:
-                rows = [row for row in rows if row["source"].startswith("day4:")]
+            if "v.source LIKE 'catalog:%'" in sql:
+                rows = [row for row in rows if row["source"].startswith("catalog:")]
             if "v.status IN" in sql:
                 statuses = re.findall(r"'([A-Z_]+)'", re.search(r"v.status IN \(([^)]+)\)", sql)[1])
                 rows = [row for row in rows if row["status"] in statuses]
@@ -261,11 +261,11 @@ class MemoryCursor:
             row["last_assessed_at"] = max(row["last_assessed_at"], params[0])
         elif sql.startswith("UPDATE vulns SET"):
             columns = [item.split("=")[0].strip() for item in re.search(r"SET (.*?) WHERE", sql)[1].split(",")]
-            assert set(columns) <= {"cvss", "epss"}, "Day 6 must never change review/legacy fields"
+            assert set(columns) <= {"cvss", "epss"}, "위험도 평가 must never change review/legacy fields"
             row = next(row for row in state["rows"] if row["vuln_id"] == params[-1])
             row.update(zip(columns, params[:-1]))
         else:
-            raise AssertionError("Unexpected Day 6 SQL: " + sql)
+            raise AssertionError("Unexpected 위험도 평가 SQL: " + sql)
 
     def fetchall(self):
         return self.rows
@@ -335,7 +335,7 @@ class RiskAssessmentTests(unittest.TestCase):
             get_risk_assessment_targets(vuln_id=1, for_update=True)
 
     def test_unreviewed_or_legacy_sources_never_reach_network(self):
-        for source in ("rule_dvwa_sqli", "rule_dvwa_fileupload", "unknown", "day4:invented"):
+        for source in ("rule_dvwa_sqli", "rule_dvwa_fileupload", "unknown", "catalog:invented"):
             self.db.state["rows"][0]["source"] = source
             with self.assertRaises(RiskSelectionError):
                 self.run_one()
@@ -363,7 +363,7 @@ class RiskAssessmentTests(unittest.TestCase):
 
     def test_unique_cve_sources_and_one_catalog_fetch_for_many_findings(self):
         self.db.state["rows"] = [stored_row(), stored_row(2),
-            stored_row(3, cve_id=OTHER, source="day4:apache:cve-2021-41773")]
+            stored_row(3, cve_id=OTHER, source="catalog:apache:cve-2021-41773")]
         result = run_risk_assessments(scan_id=4)
         self.assertEqual(len(result["results"]), 3)
         self.nvd.assert_called_once_with(sorted([CVE, OTHER]), timeout=10)
@@ -517,7 +517,7 @@ class RiskAssessmentTests(unittest.TestCase):
         self.assert_no_review_writes()
 
     def test_concurrent_source_or_cve_change_cannot_use_stale_intel(self):
-        for changes in ({"source": "rule_dvwa_sqli"}, {"cve_id": OTHER, "source": "day4:apache:cve-2021-41773"}):
+        for changes in ({"source": "rule_dvwa_sqli"}, {"cve_id": OTHER, "source": "catalog:apache:cve-2021-41773"}):
             self.db = MemoryDB()
             self.before_fetch = lambda: self.db.state["rows"][0].update(changes)
             result = self.run_one(save=True)["results"][0]

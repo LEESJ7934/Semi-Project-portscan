@@ -9,7 +9,7 @@ from unittest.mock import patch
 from analysis.run_analysis import main
 
 ROOT = Path(__file__).resolve().parents[1]
-EXAMPLE = ROOT / "examples" / "day4_ports.json"
+EXAMPLE = ROOT / "examples" / "sample_ports.json"
 
 
 class AnalysisCliTests(unittest.TestCase):

@@ -172,7 +172,7 @@ def _read_rows(conn, selection):
             SELECT v.id AS vuln_id, v.port_id, v.cve_id, v.title, v.source, v.status, v.severity,
                    v.first_detected_at, v.last_detected_at, v.verified_at, v.closed_at
             FROM vulns AS v WHERE v.port_id IN
-        """, [row["port_id"] for row in ports], "AND v.source LIKE 'day4:%' ORDER BY v.id")
+        """, [row["port_id"] for row in ports], "AND v.source LIKE 'catalog:%' ORDER BY v.id")
         cloud_resources, cloud_findings = [], []
         cloud_select = """
             SELECT cr.id AS cloud_resource_id, cr.host_id, cr.provider, cr.account_id, cr.region,
@@ -208,7 +208,7 @@ def cursor_rows(cursor, assets, scans, ports, findings, cloud_resources=None, cl
     try:
         reviewed = {rule["id"]: rule["cve"] for rule in load_catalog()[0]["rules"]}
     except (OSError, ValueError, KeyError) as exc:
-        raise ReportDataError("Reviewed Day 4 catalog could not be read") from exc
+        raise ReportDataError("Reviewed 검토된 CVE 카탈로그 could not be read") from exc
     findings = [row for row in findings if reviewed.get(row["source"]) == row["cve_id"]]
     ids = [row["vuln_id"] for row in findings]
     assessments = _related(cursor, """
@@ -248,7 +248,7 @@ def parse_evidence(row):
         result.update(details_status="PARSE_ERROR", parse_error="Invalid evidence content", details={})
         return result
     parsed = _pick(content, ("result", "reason", "error_code", "additional_checks"))
-    if row.get("checker") == "day4_mapper":
+    if row.get("checker") == "cve_catalog_mapper":
         parsed.update(result=content.get("status"), reason=content.get("match_reason"),
                       additional_checks=content.get("conditions_to_verify"),
                       references=content.get("references"), affected=content.get("affected"),

@@ -1,4 +1,4 @@
-"""Shared checker interface and the Day 5 verification result contract."""
+"""Shared checker interface and the CVE 검증 verification result contract."""
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -22,7 +22,7 @@ def check_result(status: str, reason: str, *, checker: str,
 class BaseChecker(ABC):
     """Keep the existing run_check(port_record, vuln_candidate) -> dict API.
 
-    Day 5 results contain status, reason, checker, evidence_type, details,
+    CVE 검증 results contain status, reason, checker, evidence_type, details,
     additional_checks and error_code. A CONFIRMED result additionally requires
     positive_evidence describing proof beyond a banner/version/HTTP status.
     Legacy checkers are not selected by the automatic CVE dispatcher.

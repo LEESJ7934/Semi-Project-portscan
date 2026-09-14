@@ -2,7 +2,7 @@
 from .base_checker import BaseChecker, check_result
 
 
-# No reviewed, nonintrusive CVE-specific templates are configured for Day 5.
+# No reviewed, nonintrusive CVE-specific templates are configured for CVE 검증.
 CVE_TEMPLATE_MAP: dict[str, str] = {}
 
 

@@ -8,7 +8,7 @@ from scanner.banner_grabber import collect_banner
 from scanner.fingerprints import identify_service
 from scanner.service_fingerprints import guess_service
 from scanner.tcp_scanner import scan_single_port
-from scripts.day4_demo_server import DemoHandler
+from scripts.demo_banner_server import DemoHandler
 
 
 class FingerprintTests(unittest.TestCase):

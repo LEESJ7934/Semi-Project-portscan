@@ -164,7 +164,7 @@ CANDIDATE
 
 따라서 제품·버전이 영향 범위에 들어가도 초기 상태는 `CANDIDATE`다.
 
-Day 5 검증기는 CVE별로 제한된 읽기 전용 확인만 수행한다.
+CVE 검증기는 CVE별로 제한된 읽기 전용 확인만 수행한다.
 예를 들어 HTTP는 루트 경로의 HEAD 같은 안전한 관찰을 사용하고,
 인증·업로드·삭제·공격 payload를 사용하지 않는다.
 
@@ -211,7 +211,7 @@ CLOSED
 프로젝트에는 Nuclei 실행과 DVWA 인증·스크린샷을 위한 실습 코드가 남아 있다.
 이들은 승인된 로컬 실습환경에서 웹 검증과 증적 수집을 연습하기 위한 구성이다.
 
-다만 최종 Day 5의 **검토된 CVE 상태 전이 경로는 CVE별 읽기 전용 verifier**를 사용한다.
+다만 최종 CVE 검증의 **검토된 CVE 상태 전이 경로는 CVE별 읽기 전용 verifier**를 사용한다.
 Nuclei 결과 하나만으로 자동 `CONFIRMED`를 만드는 구조가 아니다.
 
 따라서 포트폴리오에서는 다음처럼 구분하는 것이 정확하다.
@@ -252,7 +252,7 @@ Nuclei 결과 하나만으로 자동 `CONFIRMED`를 만드는 구조가 아니�
 보고서를 생성하는 순간 스캔이나 외부 API를 다시 실행하면
 보고서 내용이 이전 단계의 저장 결과와 달라질 수 있다.
 
-그래서 Day 7 보고서는:
+그래서 보고서 생성 보고서는:
 
 - 하나의 consistent read transaction에서 DB snapshot 조회
 - INSERT / UPDATE / DELETE 없음
@@ -313,7 +313,7 @@ Nuclei 결과 하나만으로 자동 `CONFIRMED`를 만드는 구조가 아니�
 - [README](../README.md)
 - [데이터베이스 V5](database_schema.md)
 - [자산관리와 승인 스코프](asset_management.md)
-- [서비스 식별과 CVE 후보](day4_service_cve_mapping.md)
+- [서비스 식별과 CVE 후보](service_cve_mapping.md)
 - [검증 기록](validation.md)
 - [포트폴리오·면접 스토리](project_story.md)
 

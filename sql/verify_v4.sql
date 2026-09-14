@@ -14,14 +14,14 @@ WHERE p.product IS NOT NULL ORDER BY h.id, p.port;
 SELECT v.id, v.cve_id, v.status, v.source, v.cvss, v.epss, v.risk,
        COUNT(e.id) AS matching_evidence_count
 FROM vulns v LEFT JOIN vuln_evidence e
-    ON e.vuln_id = v.id AND e.checker = 'day4_mapper'
-WHERE v.source LIKE 'day4:%'
+    ON e.vuln_id = v.id AND e.checker = 'cve_catalog_mapper'
+WHERE v.source LIKE 'catalog:%'
 GROUP BY v.id ORDER BY v.id;
 -- Expected: no rows. Re-saving the same candidate must not create duplicate rows/evidence.
 SELECT port_id, cve_id, source, COUNT(*) AS duplicate_count
 FROM vulns GROUP BY port_id, cve_id, source HAVING COUNT(*) > 1;
 SELECT vuln_id, sha256, COUNT(*) AS duplicate_evidence_count
-FROM vuln_evidence WHERE checker = 'day4_mapper'
+FROM vuln_evidence WHERE checker = 'cve_catalog_mapper'
 GROUP BY vuln_id, sha256 HAVING COUNT(*) > 1;
 -- Preserved legacy findings need review. Their old rules are no longer executed.
 SELECT id, cve_id, source, status, 'REVIEW_RETIRED_RULE' AS review_note

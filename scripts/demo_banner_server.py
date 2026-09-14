@@ -18,7 +18,7 @@ class DemoHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        body = b"PortScanner Day 4: simulated banner only, not an Apache installation.\n"
+        body = b"Infrastructure Security Scanner: simulated banner only, not an Apache installation.\n"
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("X-Portscanner-Demo", "simulated-banner-only")

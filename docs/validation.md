@@ -49,10 +49,10 @@ py -m unittest discover -s .	ests -p "test_*.py" -v
 - JSON/PDF 출력
 - secret pattern 검사
 
-Day 7 Work 검증에서는 **133개 자동 테스트 PASS**가 기록되었다.
+보고서 생성 Work 검증에서는 **133개 자동 테스트 PASS**가 기록되었다.
 이 수치는 당시 Work의 offline 환경 결과이며, 실제 MySQL/E2E 완료를 의미하지 않는다.
 
-Day 15에서는 사용자 PC의 현재 가상환경에서 전체 suite를 다시 실행해
+최종에서는 사용자 PC의 현재 가상환경에서 전체 suite를 다시 실행해
 최종 숫자와 결과를 재확인한다.
 
 ## 3. 정적·구성 검사
@@ -95,8 +95,8 @@ vuln_risk_assessments  1
 
 ## 5. 로컬 서비스 식별 E2E
 
-Day 4에서는 실제 취약 Apache를 배포하지 않고
-`day4_demo_server.py`가 Apache 버전 문자열을 흉내 내도록 했다.
+서비스·CVE 매핑에서는 실제 취약 Apache를 배포하지 않고
+`demo_banner_server.py`가 Apache 버전 문자열을 흉내 내도록 했다.
 
 예시 흐름:
 
@@ -157,7 +157,7 @@ POTENTIAL
 
 ## 7. 위험 우선순위 E2E
 
-Day 6에서는 저장된 `POTENTIAL` finding에 대해
+위험도 평가에서는 저장된 `POTENTIAL` finding에 대해
 NVD CVSS, FIRST EPSS, CISA KEV와 자산 context를 결합했다.
 
 실습 결과 예:
@@ -182,7 +182,7 @@ priority            P2
 
 ## 8. 보고서 E2E
 
-Day 7 실제 PC에서 local asset 기준으로 JSON과 PDF를 생성했다.
+보고서 생성 실제 PC에서 local asset 기준으로 JSON과 PDF를 생성했다.
 
 확인된 항목:
 
@@ -263,9 +263,9 @@ assessment freshness CURRENT 1
 
 이런 실패 경계를 테스트에 남겨 회귀를 방지했다.
 
-## 12. Day 15 최종 재현 체크리스트
+## 12. 최종 최종 재현 체크리스트
 
-Day 15에는 새 기능을 추가하지 않고 다음을 처음부터 다시 확인한다.
+최종에는 새 기능을 추가하지 않고 다음을 처음부터 다시 확인한다.
 
 ```text
 [ ] 가상환경 / requirements

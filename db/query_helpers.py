@@ -714,7 +714,7 @@ def get_ports_with_vuln_candidates(
 def get_risk_assessment_targets(
     *, conn=None, vuln_id=None, scan_id=None, asset_uid=None, for_update=False,
 ):
-    """Day 6 selection. scan_id means the port's current scan, not historical replay.
+    """위험도 평가 selection. scan_id means the port's current scan, not historical replay.
 
     The locked read deliberately includes newly ineligible rows so the caller can
     skip a concurrent review/source change. No connection is retained by a preview.
@@ -737,7 +737,7 @@ def get_risk_assessment_targets(
     """
     if not for_update:
         sql += """
-        AND v.source LIKE 'day4:%'
+        AND v.source LIKE 'catalog:%'
         AND v.status IN ('CANDIDATE', 'POTENTIAL', 'CONFIRMED', 'RETEST_REQUIRED', 'ERROR')
         """
     params = []

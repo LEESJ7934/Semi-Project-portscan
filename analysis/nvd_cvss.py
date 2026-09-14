@@ -1,4 +1,4 @@
-"""Structured NVD CVSS results and bounded HTTP reads for Day 6 intel sources."""
+"""Structured NVD CVSS results and bounded HTTP reads for 위험도 평가 외부 정보원."""
 from __future__ import annotations
 
 import math
@@ -49,7 +49,7 @@ def request_json(url, *, params=None, headers=None, timeout=10, session=None):
     """
     validate_timeout(timeout)
     if url not in INTEL_URLS:
-        raise ValueError("URL is not a Day 6 intel source")
+        raise ValueError("URL is not a 위험도 평가 intel source")
     client = session if session is not None else requests
     for attempt in range(3):
         response = None

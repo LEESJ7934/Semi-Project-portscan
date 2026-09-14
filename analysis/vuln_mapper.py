@@ -38,7 +38,7 @@ def load_catalog(rule_path: str | Path = DEFAULT_RULES) -> tuple[dict, str]:
     raw = Path(rule_path).read_bytes()
     catalog = json.loads(raw.decode("utf-8-sig"))
     if not isinstance(catalog, dict) or catalog.get("schema_version") != 1:
-        raise ValueError("Use the Day 4 product/range catalog; legacy regex rules are rejected.")
+        raise ValueError("Use the 제품·버전 범위 카탈로그; legacy regex rules are rejected.")
     if not isinstance(catalog.get("rules"), list) or not catalog.get("reviewed_on"):
         raise ValueError("Catalog requires rules and reviewed_on.")
     seen = set()
@@ -52,8 +52,8 @@ def load_catalog(rule_path: str | Path = DEFAULT_RULES) -> tuple[dict, str]:
         product = rule["product"]
         if product not in SUPPORTED_PRODUCTS or not re.fullmatch(r"CVE-\d{4}-\d{4,}", rule["cve"]):
             raise ValueError("Unsupported product or malformed CVE identifier.")
-        if not re.fullmatch(r"day4:[a-z0-9_:-]{1,85}", rule["id"]) or rule["id"] in seen:
-            raise ValueError("Rule IDs must be unique and start with day4:.")
+        if not re.fullmatch(r"catalog:[a-z0-9_:-]{1,85}", rule["id"]) or rule["id"] in seen:
+            raise ValueError("Rule IDs must be unique and start with catalog:.")
         seen.add(rule["id"])
         if rule["severity"] not in {"INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"}:
             raise ValueError("Unsupported severity.")

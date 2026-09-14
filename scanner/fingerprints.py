@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 
-PARSER_VERSION = "day4.1"
+PARSER_VERSION = "service-fingerprint-v1"
 HTTP_PRODUCTS = {
     "apache": "apache_http_server",
     "nginx": "nginx",

@@ -391,7 +391,7 @@ event-sourcing 구조는 이번 범위에 포함하지 않았다.
 ### "DVWA와 Nuclei는 어디에 쓰나요?"
 
 로컬 승인 실습환경에서 웹 검증, 도구 연동, screenshot/evidence를 연습하는 용도다.
-현재 Day 5 상태 전이의 핵심은 CVE별 읽기 전용 verifier이며,
+현재 CVE 검증 상태 전이의 핵심은 CVE별 읽기 전용 verifier이며,
 Nuclei 결과 하나로 자동 CONFIRMED하지 않는다.
 
 ## 10. 표현 주의

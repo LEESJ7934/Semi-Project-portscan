@@ -117,8 +117,8 @@ host_id + port + protocol
 port_id + cve_id + source
 ```
 
-Day 4 재분석은 후보와 탐지 근거를 저장하며 검토 상태를 CANDIDATE로 되돌리지 않는다.
-Day 6은 외부 정상 관측일 때만 `cvss`/`epss` summary를 갱신하고 조회 오류에서는 기존 값을 보존한다.
+CVE 후보 재분석은 후보와 탐지 근거를 저장하며 검토 상태를 CANDIDATE로 되돌리지 않는다.
+위험도 평가는 외부 정상 관측일 때만 `cvss`/`epss` summary를 갱신하고 조회 오류에서는 기존 값을 보존한다.
 `epss`는 V5에서 `DECIMAL(10,9) NULL`이다.
 `risk`는 과거 weighted score를 보존한 legacy 필드이며 현재 우선순위에는 사용하지 않는다.
 현재 규칙 기반 우선순위와 근거는 `vuln_risk_assessments`에 별도로 저장한다.
@@ -157,7 +157,7 @@ Day 6은 외부 정상 관측일 때만 `cvss`/`epss` summary를 갱신하고 �
 
 ### vuln_risk_assessments
 
-Day 6의 평가 입력·판정·출처를 finding별로 보존한다. `vuln_id`가 `vulns.id`를 참조하며
+위험도 평가의 평가 입력·판정·출처를 finding별로 보존한다. `vuln_id`가 `vulns.id`를 참조하며
 finding 삭제 시 ON DELETE CASCADE가 적용된다.
 
 | 필드 | 의미 |
@@ -176,7 +176,7 @@ UNIQUE 기준은 `(vuln_id, methodology_id, input_sha256)`이다.
 동일 입력 재평가는 기존 행을 재사용하고 last_assessed_at과 observations를 갱신한다.
 따라서 최신 assessment는 가장 큰 ID가 아니라 `last_assessed_at DESC, id DESC`로 선택한다.
 priority와 last_assessed_at 검색용 index가 있다.
-Day 6은 status/검증일/종료일/조치이력을 변경하지 않는다.
+위험도 평가는 status/검증일/종료일/조치이력을 변경하지 않는다.
 CISA due_date는 JSON 출처 metadata이며 사용자 조직의 의무 SLA가 아니다.
 
 ## 4. 표준 상태값
@@ -286,9 +286,9 @@ V5는 vulns.epss precision 확장과 vuln_risk_assessments 생성만 포함한�
 `verify_v5.sql`을 전후 실행해 기존 count 보존과 신규 구조를 확인한다.
 MySQL DDL은 implicit commit이 있으므로 전체 migration을 transaction rollback으로 복구할 수는 없다.
 
-### 현재 V5 / Day 7
+### 현재 V5 / 보고서 생성
 
-이미 V5라면 Day 7을 위한 migration이나 init.sql 재실행은 없다.
+이미 V5라면 보고서 생성을 위한 migration이나 init.sql 재실행은 없다.
 보고서는 READ ONLY / REPEATABLE READ / consistent snapshot으로 조회하고 rollback으로 읽기 transaction을 종료한다.
 INSERT/UPDATE/DELETE/commit과 외부 source 재조회는 하지 않는다.
 보고서 JSON/PDF는 DB 밖의 `reports/`에 생성된다.
@@ -350,7 +350,7 @@ HAVING COUNT(*) > 1;
 |---|---|---|
 | `ports.product` | `VARCHAR(100) NULL` | `apache_http_server`, `openssh` 등 식별된 제품 |
 | `ports.fingerprint` | `JSON NULL` | 파서 버전, 근거, 서비스·제품·버전, 식별 출처, 프로브 오류, TLS 식별 정보 |
-| `vuln_evidence` (기존 테이블 재사용) | `checker=day4_mapper`, `evidence_type=BANNER` | 후보 선정 이유, CVE 출처, 영향 범위, 규칙 해시, 스캔 ID를 JSON details로 보존 |
+| `vuln_evidence` (기존 테이블 재사용) | `checker=cve_catalog_mapper`, `evidence_type=BANNER` | 후보 선정 이유, CVE 출처, 영향 범위, 규칙 해시, 스캔 ID를 JSON details로 보존 |
 
 새 CVE 후보는 `CANDIDATE`, 미조회 `cvss/epss/risk`는 `NULL`입니다.
 같은 포트/CVE/출처의 후보는 기존 UNIQUE 키로 중복 방지합니다.
@@ -363,9 +363,9 @@ HAVING COUNT(*) > 1;
 
 V3.1에서 V4로 이동할 때는 `migration_v4.sql`을 사용합니다. 이후 V5 적용은 위 절차를 따릅니다.
 `verify_v4.sql`은 구조·후보·근거·중복·폐기한 규칙의 기존 기록을 읽기 전용으로 확인합니다.
-자세한 실행 절차: [4일차 안내](day4_service_cve_mapping.md).
+자세한 실행 절차: [서비스·CVE 매핑 안내](service_cve_mapping.md).
 
-## Day 7 보고서의 현재 상태 해석
+## 보고서 생성 보고서의 현재 상태 해석
 
 자산 선택은 `p.last_scan_id = h.last_scan_id`, scan 선택은 `p.last_scan_id = 선택한 scan ID`이다.
 현재 관찰의 모든 endpoint에 연결된 reviewed finding을 포함하고, 열린 포트 수는 state=open만 센다.

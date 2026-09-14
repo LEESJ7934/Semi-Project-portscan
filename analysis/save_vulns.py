@@ -23,8 +23,8 @@ def save_vulns(vulns: list[dict]) -> list[int]:
     for vuln in vulns:
         if not isinstance(vuln.get("port_id"), int) or isinstance(vuln["port_id"], bool) or vuln["port_id"] <= 0:
             raise ValueError("Saving requires real positive database port IDs.")
-        if vuln.get("status") != "CANDIDATE" or not vuln.get("source", "").startswith("day4:"):
-            raise ValueError("Day 4 analysis only saves CANDIDATE records from the reviewed catalog.")
+        if vuln.get("status") != "CANDIDATE" or not vuln.get("source", "").startswith("catalog:"):
+            raise ValueError("CVE 후보 분석 only saves CANDIDATE records from the reviewed catalog.")
         if not vuln.get("fingerprint") or not vuln.get("catalog_sha256"):
             raise ValueError("Missing candidate evidence.")
         for key, maximum in (("cvss", 10), ("epss", 1), ("risk", 1)):
@@ -47,12 +47,12 @@ def save_vulns(vulns: list[dict]) -> list[int]:
             with conn.cursor() as cursor:
                 cursor.execute(
                     "SELECT id FROM vuln_evidence WHERE vuln_id = %s "
-                    "AND checker = 'day4_mapper' AND sha256 = %s LIMIT 1 FOR UPDATE",
+                    "AND checker = 'cve_catalog_mapper' AND sha256 = %s LIMIT 1 FOR UPDATE",
                     (vuln_id, digest),
                 )
                 exists = cursor.fetchone()
             if not exists:
-                insert_vuln_evidence(conn, vuln_id, "day4_mapper", "BANNER",
+                insert_vuln_evidence(conn, vuln_id, "cve_catalog_mapper", "BANNER",
                                      details=details, sha256=digest)
             saved_ids.append(vuln_id)
         conn.commit()

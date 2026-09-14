@@ -1,4 +1,4 @@
-"""Preview Day 6 CVE priorities; persist V5 assessments only with --save."""
+"""Preview CVE 위험도 우선순위; persist V5 assessments only with --save."""
 from __future__ import annotations
 
 import argparse

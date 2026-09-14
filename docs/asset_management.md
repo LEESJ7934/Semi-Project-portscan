@@ -1,4 +1,4 @@
-# Day 3 Asset Management and Scan Scope
+# 자산 관리와 승인 스코프
 
 ## 1. 목적
 
@@ -167,7 +167,7 @@ Get-Content -Raw .\sql\verify_v3.sql | docker exec -i portscan-mysql sh -c 'MYSQ
 
 ### 7-4. 포트 범위 저장 보완 (V3.1)
 
-초기 Day 3 코드에서는 CLI가 파싱한 포트 목록을 문자열로 바꾸어
+초기 초기 자산 관리 코드에서는 CLI가 파싱한 포트 목록을 문자열로 바꾸어
 저장했다. 기본 범위 `1-1024`도 5,037자로 늘어나 기존
 `scans.port_range`의 VARCHAR(100) 제한을 초과했다.
 

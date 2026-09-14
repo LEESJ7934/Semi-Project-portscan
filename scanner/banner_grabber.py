@@ -51,7 +51,7 @@ def _http_request(host: str, port: int, server_name: str | None) -> bytes:
     if ":" in authority:
         authority = f"[{authority}]"
     return (f"HEAD / HTTP/1.1\r\nHost: {authority}:{port}\r\n"
-            "User-Agent: PortScanner-Day4/1.0\r\nConnection: close\r\n\r\n").encode("ascii")
+            "User-Agent: InfrastructureSecurityScanner/1.0\r\nConnection: close\r\n\r\n").encode("ascii")
 
 
 def collect_banner(host: str, port: int, service: str, timeout: float = 1.0,

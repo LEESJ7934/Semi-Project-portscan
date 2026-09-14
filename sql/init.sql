@@ -385,7 +385,7 @@ CREATE TABLE IF NOT EXISTS remediation_history (
         ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Day 6 assessments; vulns.risk remains a preserved legacy column.
+-- 위험도 평가 assessments; vulns.risk remains a preserved legacy column.
 CREATE TABLE IF NOT EXISTS vuln_risk_assessments (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     vuln_id BIGINT UNSIGNED NOT NULL,

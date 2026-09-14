@@ -1,4 +1,4 @@
-"""Independent Day 6 pipeline: external intel reads, then short V5 transactions."""
+"""Independent 위험도 평가 파이프라인: external intel reads, then short V5 transactions."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -47,7 +47,7 @@ def validate_selection(vuln_id=None, scan_id=None, asset_uid=None):
 
 def _eligible(row, reviewed):
     source = row.get("source") or ""
-    return (row.get("status") in ELIGIBLE_STATUSES and source.startswith("day4:")
+    return (row.get("status") in ELIGIBLE_STATUSES and source.startswith("catalog:")
             and source not in RETIRED_RULE_IDS and valid_cve(row.get("cve_id"))
             and reviewed.get(source) == row["cve_id"])
 
@@ -131,14 +131,14 @@ def run_risk_assessments(*, vuln_id=None, scan_id=None, asset_uid=None, save=Fal
         catalog, _ = load_catalog()
         reviewed = {rule["id"]: rule["cve"] for rule in catalog["rules"]}
     except (OSError, ValueError, KeyError) as exc:
-        raise RiskPolicyError("Reviewed Day 4 catalog could not be loaded") from exc
+        raise RiskPolicyError("Reviewed 검토된 CVE 카탈로그 could not be loaded") from exc
     try:
         snapshots = get_risk_assessment_targets(vuln_id=vuln_id, scan_id=scan_id, asset_uid=asset_uid)
     except Exception as exc:
         raise RiskDatabaseError("Risk selection read failed (" + type(exc).__name__ + ")") from exc
     snapshots = [row for row in snapshots if _eligible(row, reviewed)]
     if not snapshots:
-        raise RiskSelectionError("No eligible reviewed Day 4 findings matched the selection")
+        raise RiskSelectionError("No eligible reviewed 카탈로그 기반 finding matched the selection")
     # Validate the snapshots before requesting external data. This read connection is already closed.
     for row in snapshots:
         _asset_context(row)

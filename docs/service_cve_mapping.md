@@ -1,7 +1,7 @@
-# 4일차: 서비스 식별과 CVE 후보 연결
+# 서비스 식별과 CVE 후보 연결
 
-기준 커밋: `00069145d1d5c1f5c52b76efd55ac951a31a53b9` (3일차 병합).
-범위는 포트스캐너입니다. 다크웹 프로젝트는 계획대로 8~12일차에 진행합니다.
+기준 커밋: `00069145d1d5c1f5c52b76efd55ac951a31a53b9` (자산 관리 병합).
+범위는 인프라 보안 진단 스캐너의 서비스 식별 및 CVE 후보 분석 기능입니다.
 
 ## 무엇이 달라졌는가
 
@@ -20,7 +20,7 @@
 
 `CANDIDATE`는 검증 전 후보입니다. 배너는 위장될 수 있고 배포판이 버전
 문자열을 유지한 채 패치를 적용할 수 있습니다. 실제 패키지·설정·패치
-확인은 5일차 검증 범위입니다. 실습 서버는 일부러 배너만 흉내 냅니다.
+확인은 CVE 검증 범위입니다. 실습 서버는 일부러 배너만 흉내 냅니다.
 
 ## 이번 규칙의 정확한 범위
 
@@ -38,7 +38,7 @@
 Apache는 경로 접근 제어와 CGI 등 설정 확인, nginx는 resolver 사용 여부 확인이
 추가로 필요합니다. OpenSSH의 portable 패치 수준과 배포판 보안 패치는 별도 확인합니다.
 `severity_basis`에 분류 근거를 보존합니다. OpenSSH의 `MEDIUM`은 프로젝트의
-임시 검토 등급이며 공식 CVSS 점수가 아닙니다. CVSS·EPSS·우선순위 계산은 6일차에 보완합니다.
+임시 검토 등급이며 공식 CVSS 점수가 아닙니다. CVSS·EPSS·우선순위 계산은 위험도 평가에 보완합니다.
 
 새 규칙은 `analysis/vuln_rules.json`의 검증 가능한 제품·버전 범위 형식을 사용합니다.
 새 제품의 버전 규칙이 다르면 `normalized_version()`도 추가해야 합니다.
@@ -46,12 +46,12 @@ Apache는 경로 접근 제어와 CGI 등 설정 확인, nginx는 resolver 사�
 
 ## 1. 패치 적용 후 코드 확인
 
-프로젝트 루트의 PowerShell에서 실행합니다. 기존 3일차 Python 환경을 사용합니다.
+프로젝트 루트의 PowerShell에서 실행합니다. 기존 자산 관리 Python 환경을 사용합니다.
 이번 변경에 추가 Python 패키지는 없습니다.
 
 ```powershell
 py -m unittest discover -s .\tests -p "test_*.py" -v
-py -m analysis.run_analysis --input .\examples\day4_ports.json
+py -m analysis.run_analysis --input .\examples\sample_ports.json
 py -m compileall -q .\scanner .\analysis .\db .\scripts .\verification .\api
 py .\scripts\check_secrets.py
 git diff --check
@@ -64,7 +64,7 @@ DB 연결은 모의 객체로 검사하므로 이 단계에는 MySQL을 실행�
 
 ## 2. 기존 V3.1 DB 백업과 V4 적용
 
-이 절차는 3일차 V3/V3.1까지 완료한 기존 DB 기준입니다. 기존 데이터 볼륨을
+이 절차는 자산 관리 V3/V3.1까지 완료한 기존 DB 기준입니다. 기존 데이터 볼륨을
 초기화하지 않습니다. 새 설치에는 V4가 반영된 `sql/init.sql`을 사용합니다.
 
 Docker Desktop을 실행한 뒤 상태를 확인합니다.
@@ -124,7 +124,7 @@ V2/V3 마이그레이션을 다시 실행할 필요는 없습니다.
 PowerShell 터미널 A에서 프로젝트 루트로 이동한 후 실행합니다.
 
 ```powershell
-py -m scripts.day4_demo_server --port 8081
+py -m scripts.demo_banner_server --port 8081
 ```
 
 `simulated Apache/2.4.50`가 표시되며 프로세스가 계속 실행되는 것이 정상입니다.
@@ -145,8 +145,8 @@ py -m scripts.run_scan scan --target 127.0.0.1 --ports 8081 -sT -sV --max-worker
 마지막에 출력된 숫자를 아래 변수에 넣습니다. `Read-Host`는 DB ID 입력을 받는 명령입니다.
 
 ```powershell
-$day4ScanId = [int](Read-Host "방금 출력된 scan_id 숫자")
-py -m analysis.run_analysis --scan-id $day4ScanId --output .\reports\day4_preview.json
+$scanId = [int](Read-Host "방금 출력된 scan_id 숫자")
+py -m analysis.run_analysis --scan-id $scanId --output .\reports\cve_preview.json
 ```
 
 정상 기준은 `candidate_count: 1`, `CVE-2021-42013`, `status: CANDIDATE`입니다.
@@ -156,8 +156,8 @@ py -m analysis.run_analysis --scan-id $day4ScanId --output .\reports\day4_previe
 후보와 근거를 저장하고 같은 분석을 한 번 더 실행합니다.
 
 ```powershell
-py -m analysis.run_analysis --scan-id $day4ScanId --save --output .\reports\day4_saved.json
-py -m analysis.run_analysis --scan-id $day4ScanId --save
+py -m analysis.run_analysis --scan-id $scanId --save --output .\reports\cve_saved.json
+py -m analysis.run_analysis --scan-id $scanId --save
 Get-Content -Raw -Encoding UTF8 .\sql\verify_v4.sql | docker exec -i portscan-mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root --default-character-set=utf8mb4 -D port_scan'
 ```
 
@@ -165,13 +165,13 @@ Get-Content -Raw -Encoding UTF8 .\sql\verify_v4.sql | docker exec -i portscan-my
 - `matching_evidence_count`는 같은 스캔·같은 규칙으로 재실행하면 1을 유지합니다.
 - 취약점 상태는 `CANDIDATE`, 미조회 점수는 `NULL`입니다.
 - 중복 검사 두 쿼리는 행이 없어야 합니다.
-- 3일차 자산의 UUID, 담당자, 중요도와 변경이력은 그대로여야 합니다.
+- 자산 관리 자산의 UUID, 담당자, 중요도와 변경이력은 그대로여야 합니다.
 
 터미널 A에서 `Ctrl+C`로 실습 서버를 종료합니다.
 
 추가 경계 확인이 필요하면 `--version 2.4.51`로 서버를 다시 실행하고 새 `-sV` 스캔 ID로
 분석합니다. 이 규칙집에서는 후보가 0개가 되며 이는 해당 두 Apache 규칙 미일치를 의미합니다.
-기존 후보를 자동으로 `CLOSED`로 바꾸지 않습니다. 조치 완료 판정은 5일차에 다룹니다.
+기존 후보를 자동으로 `CLOSED`로 바꾸지 않습니다. 조치 완료 판정은 CVE 검증에 다룹니다.
 
 ## 4. 명령과 저장 의미
 
@@ -208,8 +208,8 @@ HTTP/2·QUIC, 모든 임의 TLS 포트, 숨겨진 제품, 미지원 프로토콜
 ## 5. 기존 후보와 검증기
 
 폐기한 규칙의 기록은 삭제하거나 안전한 것으로 재분류하지 않습니다.
-`verify_v4.sql`로 확인한 후 5일차에 검토합니다. 기존 범용 검증기는 폐기한 규칙과
-`day4:` 출처의 후보를 건너뛰며 상태를 유지합니다. 제품·버전이 맞는다는 이유만으로
+`verify_v4.sql`로 확인한 후 CVE 검증에 검토합니다. 기존 범용 검증기는 폐기한 규칙과
+`catalog:` 출처의 후보를 건너뛰며 상태를 유지합니다. 제품·버전이 맞는다는 이유만으로
 범용 HTTP/FTP 검사가 CVE를 `CONFIRMED`로 바꾸는 것을 막기 위한 경계입니다.
 
 같은 후보를 재저장해도 검토된 상태와 `ERROR` 상태를 덮어쓰지 않습니다.
@@ -229,15 +229,15 @@ git status --short
 스테이징과 커밋:
 
 ```powershell
-git add README.md docs/day4_service_cve_mapping.md docs/database_schema.md
+git add README.md docs/service_cve_mapping.md docs/database_schema.md
 git add scanner/fingerprints.py scanner/banner_grabber.py scanner/tcp_scanner.py scanner/udp_scanner.py scanner/service_fingerprints.py scanner/version_parser.py scanner/scan_runner.py scripts/run_scan.py
 git add analysis/fingerprint_parser.py analysis/run_analysis.py analysis/save_vulns.py analysis/vuln_mapper.py analysis/vuln_rules.json api/analysis_report.py
 git add db/query_helpers.py db/save_scan_results.py sql/init.sql sql/migration_v4.sql sql/verify_v4.sql verification/run_verification.py
-git add scripts/day4_demo_server.py examples/day4_ports.json tests/test_fingerprints.py tests/test_vuln_mapper.py tests/test_analysis_cli.py tests/test_save_vulns.py
+git add scripts/demo_banner_server.py examples/sample_ports.json tests/test_fingerprints.py tests/test_vuln_mapper.py tests/test_analysis_cli.py tests/test_save_vulns.py
 git diff --cached --check
 git status --short
-git commit -m "4일차 서비스 식별 및 근거 기반 CVE 후보 연결"
-git push -u origin feature/day4-service-cve-mapping
+git commit -m "서비스·CVE 매핑 서비스 식별 및 근거 기반 CVE 후보 연결"
+git push -u origin feature/service-cve-mapping
 ```
 
 `reports/`, `.env`, 로컬 스코프와 DB 덤프는 커밋 대상이 아닙니다.
@@ -254,4 +254,4 @@ git push -u origin feature/day4-service-cve-mapping
 - 실제 루프백 TLS 연결, SNI, HTTPS 제품 식별과 인증서 신뢰 미검증 표시 확인.
 
 위 검사는 별도 검사 환경의 결과입니다. 사용자의 Windows와 Docker DB에는
-위 실행 절차를 적용하고 결과를 확인해야 4일차 작업이 완료됩니다.
+위 실행 절차를 적용하고 결과를 확인해야 서비스·CVE 매핑 작업이 완료됩니다.

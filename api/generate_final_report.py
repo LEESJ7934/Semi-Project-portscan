@@ -1,4 +1,4 @@
-"""Compatibility entry point for the single Day 7 generator (asset UUID / scan ID).
+"""Compatibility entry point for the single 보고서 생성기 (asset UUID / scan ID).
 
 The former positional IP API and automatic Shodan/PDF-merger flow are retired.
 """

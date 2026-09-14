@@ -4,7 +4,7 @@
   "coverage": "Curated teaching subset; not full CVE coverage or a claim of exploitability.",
   "rules": [
     {
-      "id": "day4:apache:cve-2021-41773",
+      "id": "catalog:apache:cve-2021-41773",
       "product": "apache_http_server",
       "services": ["http", "https"],
       "cve": "CVE-2021-41773",
@@ -16,7 +16,7 @@
       "references": ["https://httpd.apache.org/security/vulnerabilities_24.html#CVE-2021-41773"]
     },
     {
-      "id": "day4:apache:cve-2021-42013",
+      "id": "catalog:apache:cve-2021-42013",
       "product": "apache_http_server",
       "services": ["http", "https"],
       "cve": "CVE-2021-42013",
@@ -28,7 +28,7 @@
       "references": ["https://httpd.apache.org/security/vulnerabilities_24.html#CVE-2021-42013"]
     },
     {
-      "id": "day4:openssh:cve-2023-25136",
+      "id": "catalog:openssh:cve-2023-25136",
       "product": "openssh",
       "services": ["ssh"],
       "cve": "CVE-2023-25136",
@@ -40,7 +40,7 @@
       "references": ["https://www.openssh.org/txt/release-9.2", "https://www.cve.org/CVERecord?id=CVE-2023-25136"]
     },
     {
-      "id": "day4:nginx:cve-2021-23017",
+      "id": "catalog:nginx:cve-2021-23017",
       "product": "nginx",
       "services": ["http", "https"],
       "cve": "CVE-2021-23017",

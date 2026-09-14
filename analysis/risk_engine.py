@@ -6,7 +6,7 @@ import json
 import math
 
 METHODOLOGY = {
-    "id": "day6-priority-v1",
+    "id": "risk-priority-v1",
     "description": "Project triage policy; not an industry standard risk formula or vulnerability verdict.",
     "thresholds": {"epss_very_high": 0.95, "epss_high": 0.80, "cvss_critical": 9.0, "cvss_high": 7.0},
     "actions": {"CANDIDATE": "VERIFY", "POTENTIAL": "VERIFY", "ERROR": "VERIFY",

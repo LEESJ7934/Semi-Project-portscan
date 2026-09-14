@@ -26,10 +26,10 @@ def fixture_data():
             "product": "apache_http_server", "version": "2.4.50", "state": "open", "last_scan_id": 4,
             "fingerprint": json.dumps({"product": "apache_http_server", "version": "2.4.50", "source": "http_server_header"})}
     finding = {"vuln_id": 101, "port_id": 11, "cve_id": CVE, "title": "Apache candidate / 확인 필요",
-               "source": "day4:apache:cve-2021-42013", "status": "POTENTIAL", "severity": "CRITICAL",
+               "source": "catalog:apache:cve-2021-42013", "status": "POTENTIAL", "severity": "CRITICAL",
                "first_detected_at": NOW, "last_detected_at": NOW, "verified_at": NOW, "closed_at": None,
                "risk": Decimal("0.969"), "cvss": Decimal("1.0"), "epss": Decimal("0.001")}
-    assessment = {"assessment_id": 1, "vuln_id": 101, "methodology_id": "day6-priority-v1",
+    assessment = {"assessment_id": 1, "vuln_id": 101, "methodology_id": "risk-priority-v1",
                   "methodology_sha256": "a" * 64, "vuln_status": "POTENTIAL", "action": "VERIFY", "priority": "P3",
                   "cvss_score": Decimal("9.80"), "cvss_version": "3.1", "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
                   "cvss_source": "nvd@nist.gov", "epss_score": Decimal("0.123456789"),
@@ -58,11 +58,11 @@ def fixture_data():
                          {**finding, "vuln_id": 103, "port_id": 12}],
             "assessments": [assessment],
             "evidence": [
-                {"evidence_id": 2, "vuln_id": 101, "checker": "day5:apache", "evidence_type": "BANNER", "sha256": "d" * 64,
+                {"evidence_id": 2, "vuln_id": 101, "checker": "verifier:apache", "evidence_type": "BANNER", "sha256": "d" * 64,
                  "collected_at": NOW, "details": json.dumps({"content": {"result": "POTENTIAL", "reason": "추가 설정 확인",
                      "error_code": None, "additional_checks": ["설정 파일 확인"], "details": {"safe_checks": ["http_head_root_no_redirects"]}},
                      "first_checked_at": "2026-09-07T10:00:00Z", "last_checked_at": "2026-09-09T10:00:00Z", "observations": 2})},
-                {"evidence_id": 1, "vuln_id": 101, "checker": "day4_mapper", "evidence_type": "BANNER", "sha256": "e" * 64,
+                {"evidence_id": 1, "vuln_id": 101, "checker": "cve_catalog_mapper", "evidence_type": "BANNER", "sha256": "e" * 64,
                  "collected_at": datetime(2026, 9, 7), "details": json.dumps({"status": "CANDIDATE", "match_reason": "공식 영향 범위 일치",
                      "conditions_to_verify": ["패치 여부 확인"], "references": ["https://httpd.apache.org/security/"], "catalog_sha256": "f" * 64})}],
             "history": [{"history_id": 2, "vuln_id": 101, "from_status": "CANDIDATE", "to_status": "POTENTIAL", "action_type": "STATUS_CHANGE",
@@ -153,8 +153,8 @@ class FixtureCursor:
             else:
                 self.rows = [row for row in data["ports"] if row["last_scan_id"] == params[0]]
         elif text.startswith("SELECT v.id AS vuln_id"):
-            assert "v.source LIKE 'day4:%'" in text
-            self.rows = [row for row in data["findings"] if row["port_id"] in params and row["source"].startswith("day4:")]
+            assert "v.source LIKE 'catalog:%'" in text
+            self.rows = [row for row in data["findings"] if row["port_id"] in params and row["source"].startswith("catalog:")]
         elif text.startswith("SELECT r.id AS assessment_id"):
             assert "newer.last_assessed_at > r.last_assessed_at" in text and "newer.id > r.id" in text
             groups = {}
@@ -289,8 +289,8 @@ class AnalysisReportTests(unittest.TestCase):
                 build_report_snapshot(**args)
         self.assertTrue(all(conn.closed and conn.commits == 0 for conn in self.db.connections))
 
-    def test_only_reviewed_current_findings_not_legacy_or_invented_day4_sources(self):
-        self.db.data["findings"].append({**self.db.data["findings"][0], "vuln_id": 199, "source": "day4:invented"})
+    def test_only_reviewed_current_findings_not_legacy_or_invented_catalog_sources(self):
+        self.db.data["findings"].append({**self.db.data["findings"][0], "vuln_id": 199, "source": "catalog:invented"})
         report = self.build()
         self.assertEqual([f["vuln_id"] for f in report["assets"][0]["findings"]], [101])
         self.assertEqual(report["summary"]["finding_count"], 1)
@@ -355,7 +355,7 @@ class AnalysisReportTests(unittest.TestCase):
         self.assertNotIn("0.969", json.dumps(report))
         self.assertTrue(all("v.risk" not in sql for sql, _ in self.db.connections[0].log))
 
-    def test_day4_day5_evidence_parsing_and_order(self):
+    def test_catalog_verifier_evidence_parsing_and_order(self):
         evidence = self.finding()["evidence"]
         self.assertEqual([row["evidence_id"] for row in evidence], [1, 2])
         self.assertEqual(evidence[0]["details"]["reason"], "공식 영향 범위 일치")

@@ -26,9 +26,9 @@ def stored_row(vuln_id=1, status="CANDIDATE", **updates):
     return {"port_id": vuln_id, "host_ip": "127.0.0.1", "port": 8081, "protocol": "tcp",
             "service": "http", "product": "apache_http_server", "version": "2.4.50",
             "banner": "HTTP/1.1 200 OK\r\nServer: Apache/2.4.50\r\n\r\n", "fingerprint": "{}",
-            "port_state": "open", "scan_id": 4, "scan_uid": "scan-day4", "scope_id": 1,
+            "port_state": "open", "scan_id": 4, "scan_uid": "scan-catalog-demo", "scope_id": 1,
             "input_target": "127.0.0.1", "resolution_type": "IP", "vuln_id": vuln_id,
-            "cve_id": "CVE-2021-42013", "title": "Candidate", "source": "day4:apache:cve-2021-42013",
+            "cve_id": "CVE-2021-42013", "title": "Candidate", "source": "catalog:apache:cve-2021-42013",
             "status": status, **updates}
 
 
